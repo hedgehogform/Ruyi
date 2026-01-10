@@ -212,7 +212,13 @@ async function handleAIChat(message: Message): Promise<void> {
   const user = message.author.displayName;
   const channelName = "name" in message.channel ? message.channel.name : "DM";
 
-  const shouldRespond = await shouldBotRespond(content, user, channelName, isMentioned, isDM);
+  const shouldRespond = await shouldBotRespond(
+    content,
+    user,
+    channelName,
+    isMentioned,
+    isDM
+  );
   if (!shouldRespond) return;
 
   if ("sendTyping" in message.channel) {
@@ -234,7 +240,9 @@ async function handleAIChat(message: Message): Promise<void> {
     startTime: Date.now(),
   };
 
-  const statusMessage = await message.reply({ embeds: [buildStatusEmbed(state)] });
+  const statusMessage = await message.reply({
+    embeds: [buildStatusEmbed(state)],
+  });
 
   const updateEmbed = async () => {
     try {
@@ -262,11 +270,18 @@ async function handleAIChat(message: Message): Promise<void> {
   const callbacks = createChatCallbacks(state, updateEmbed);
 
   try {
-    const reply = await chat(content, user, message.channel.id, chatHistory, callbacks);
+    const reply = await chat(
+      content,
+      user,
+      message.channel.id,
+      chatHistory,
+      callbacks
+    );
     await deleteStatusEmbed();
 
     if (reply) {
-      const truncated = reply.length > 2000 ? reply.slice(0, 1997) + "..." : reply;
+      const truncated =
+        reply.length > 2000 ? reply.slice(0, 1997) + "..." : reply;
       await message.reply(truncated);
       botLogger.info({ user, replyLength: reply.length }, "Sent reply");
     } else {
