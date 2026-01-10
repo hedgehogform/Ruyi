@@ -1,4 +1,4 @@
-import { client, registerEvents, startBot } from "./bot";
+import { registerEvents, startBot } from "./bot";
 
 registerEvents();
 startBot();
