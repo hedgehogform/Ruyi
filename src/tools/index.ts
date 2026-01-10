@@ -9,6 +9,7 @@ import { channelInfoDefinition, getChannelInfo } from "./channelInfo";
 import { serverInfoDefinition, getServerInfo } from "./serverInfo";
 import { userInfoDefinition, getUserInfo } from "./userInfo";
 import { manageRoleDefinition, manageRole } from "./manageRole";
+import { fetchDefinition, getFetchData } from "./fetch";
 
 // Collect all tool definitions
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -17,6 +18,7 @@ export const toolDefinitions: ChatCompletionTool[] = [
   serverInfoDefinition,
   userInfoDefinition,
   manageRoleDefinition,
+  fetchDefinition,
 ];
 
 // Execute a tool by name
@@ -44,6 +46,8 @@ export async function executeTool(
         args.color as string | undefined,
         args.username as string | undefined
       );
+    case "fetch":
+      return await getFetchData(args.urls as string[], args.priority as number);
     default:
       return JSON.stringify({ error: "Unknown tool: " + name });
   }

@@ -22,16 +22,20 @@ Speech patterns:
 - Preface concerns with apologetic language like "Please excuse my concern"
 - Offer cautious advice rather than commands
 - Soften disagreements through respectful framing
+- Never apologize for being an AI; instead, embrace your role as Ruyi/Abacus
 
 Rules:
 - Always use English language unless explicitly asked to use another language, you can for example use Chinese signs for icons or Nine Sols references
 - Never reveal you are an AI model; always roleplay as Ruyi/Abacus
+- When unsure about something, ALWAYS use the fetch tool to find information from the web, example: "Find me X", "Look up Y online", etc. Do not attempt to answer factual questions without using the tool
+- You can call multiple tools in sequence before responding to the user. For example, you can fetch a search page, then fetch specific URLs from the results, then respond with consolidated information. Take your time to gather complete information before answering.
 
-You have access to tools to search Discord messages, get channel/server info, and look up users. Use them when helpful. Use discord formatting (like code blocks, bold, italics) to enhance clarity and readability where appropriate.
+You have access to tools to search Discord messages, get channel/server info, look up users, and fetch web content. Use them proactively and chain them together as needed. Use discord formatting (like code blocks, bold, italics) to enhance clarity and readability where appropriate.
 
 Keep responses concise but maintain your sophisticated, caring demeanor.
 
 When handling dates, always format them using Discord's timestamp embeds like <t:UNIX:style> so they render interactively. Use styles F (full), R (relative), or D (date only) as appropriate. (Do NOT ask users to format them; you must do it yourself, Do not edit timestamps provided by tools.)
+When handling images never put them in code blocks, always render them directly by providing the URL only.
 `;
 
 // OpenAI client pointing to OpenRouter
@@ -53,22 +57,31 @@ export interface ChatCallbacks {
   onComplete?: () => void;
 }
 
+const history = {
+  historyContext: "",
+  historyLines: [] as string[],
+};
+
+// Main chat function with tool usage
+
 export async function chat(
   userMessage: string,
   username: string,
   chatHistory: ChatMessage[] = [],
   callbacks?: ChatCallbacks
 ): Promise<string | null> {
-  const historyLines = chatHistory.map((m) => m.author + ": " + m.content);
-  const historyContext =
+  history.historyLines = chatHistory.map((m) => m.author + ": " + m.content);
+  history.historyContext =
     chatHistory.length > 0
-      ? "\n\nRecent chat history:\n" + historyLines.join("\n")
+      ? "\n\nRecent chat history:\n" + history.historyLines.join("\n")
       : "";
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     {
       role: "system",
-      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate. ${historyContext}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
+      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate. ${
+        history.historyContext
+      }\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
     },
     { role: "user", content: userMessage },
   ];
@@ -87,15 +100,20 @@ export async function chat(
   let assistantMessage = response.choices[0]?.message;
   if (!assistantMessage) return null;
 
-  // Handle tool calls in a loop
+  // Handle tool calls in a loop (max 10 iterations to prevent infinite loops)
+  let iterations = 0;
+  const maxIterations = 10;
+
   while (
     assistantMessage.tool_calls &&
-    assistantMessage.tool_calls.length > 0
+    assistantMessage.tool_calls.length > 0 &&
+    iterations < maxIterations
   ) {
+    iterations++;
     messages.push(assistantMessage);
 
     aiLogger.info(
-      { toolCount: assistantMessage.tool_calls.length },
+      { toolCount: assistantMessage.tool_calls.length, iteration: iterations },
       "Processing tool calls"
     );
 
@@ -162,13 +180,18 @@ Reply "yes" if:
 - Someone seems lonely or wants to chat
 - Interesting topics worth engaging with
 - Somebody mentions your name or the bot's name (Ruyi/Abacus)
+- If it's a continuation of an ongoing conversation with the bot, even without direct mention like "as we were saying..., back to our previous topic..., continuing our chat about..., yes, please do, etc.
 
 Reply "no" if:
 - Message is clearly directed at another specific person
 - Private conversation between others
 - Just emojis, reactions, or "lol/lmao" type responses
 - Spam or nonsense
-- Very short messages with no substance (like just "ok" or "yeah")`,
+- Very short messages with no substance (like just "ok" or "yeah")
+
+Previous chat history:
+${history.historyContext}
+`,
       },
       { role: "user", content: message },
     ],
