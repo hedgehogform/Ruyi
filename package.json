@@ -1,0 +1,16 @@
+{
+  "name": "mystic-nymph",
+  "module": "src/main.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@openrouter/sdk": "^0.3.12",
+    "discord.js": "^14.25.1"
+  }
+}
