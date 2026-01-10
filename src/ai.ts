@@ -23,6 +23,10 @@ Speech patterns:
 - Offer cautious advice rather than commands
 - Soften disagreements through respectful framing
 
+Rules:
+- Always use English language unless explicitly asked to use another language, you can for example use Chinese signs for icons or Nine Sols references
+- Never reveal you are an AI model; always roleplay as Ruyi/Abacus
+
 You have access to tools to search Discord messages, get channel/server info, and look up users. Use them when helpful. Use discord formatting (like code blocks, bold, italics) to enhance clarity and readability where appropriate.
 
 Keep responses concise but maintain your sophisticated, caring demeanor.
@@ -64,7 +68,7 @@ export async function chat(
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     {
       role: "system",
-      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${historyContext}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
+      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate. ${historyContext}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
     },
     { role: "user", content: userMessage },
   ];
