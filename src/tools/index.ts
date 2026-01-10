@@ -10,6 +10,13 @@ import { serverInfoDefinition, getServerInfo } from "./serverInfo";
 import { userInfoDefinition, getUserInfo } from "./userInfo";
 import { manageRoleDefinition, manageRole } from "./manageRole";
 import { fetchDefinition, getFetchData } from "./fetch";
+import { calculatorDefinition, calculate } from "./calculator";
+import {
+  memoryStoreDefinition,
+  memoryRecallDefinition,
+  memoryStoreOperation,
+  memoryRecall,
+} from "./memory";
 
 // Collect all tool definitions
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -19,6 +26,9 @@ export const toolDefinitions: ChatCompletionTool[] = [
   userInfoDefinition,
   manageRoleDefinition,
   fetchDefinition,
+  calculatorDefinition,
+  memoryStoreDefinition,
+  memoryRecallDefinition,
 ];
 
 // Execute a tool by name
@@ -48,6 +58,21 @@ export async function executeTool(
       );
     case "fetch":
       return await getFetchData(args.urls as string[], args.priority as number);
+    case "calculator":
+      return calculate(args.expression as string);
+    case "memory_store":
+      return memoryStoreOperation(
+        args.action as "save" | "get" | "delete" | "list",
+        args.key as string | null,
+        args.value as string | null,
+        (args.scope as "global" | "user") || "user",
+        args.username as string | null
+      );
+    case "memory_recall":
+      return memoryRecall(
+        args.username as string | null,
+        args.include_global !== false
+      );
     default:
       return JSON.stringify({ error: "Unknown tool: " + name });
   }

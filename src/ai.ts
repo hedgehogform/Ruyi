@@ -2,6 +2,91 @@ import OpenAI from "openai";
 import { toolDefinitions, executeTool } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+// Memory storage path
+const MEMORY_FILE = join(import.meta.dir, "..", "memory.json");
+
+interface MemoryEntry {
+  timestamp: number;
+  channelId: string;
+  author: string;
+  content: string;
+  isBot: boolean;
+}
+
+interface Memory {
+  conversations: Record<string, MemoryEntry[]>;
+  lastInteraction: Record<string, number>;
+}
+
+// Load or initialize memory
+function loadMemory(): Memory {
+  try {
+    if (existsSync(MEMORY_FILE)) {
+      const data = readFileSync(MEMORY_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    aiLogger.warn({ error }, "Failed to load memory, starting fresh");
+  }
+  return { conversations: {}, lastInteraction: {} };
+}
+
+function saveMemory(memory: Memory): void {
+  try {
+    writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+  } catch (error) {
+    aiLogger.error({ error }, "Failed to save memory");
+  }
+}
+
+// Memory instance
+const memory = loadMemory();
+
+// Add message to memory
+export function rememberMessage(
+  channelId: string,
+  author: string,
+  content: string,
+  isBot: boolean
+): void {
+  memory.conversations[channelId] ??= [];
+
+  memory.conversations[channelId].push({
+    timestamp: Date.now(),
+    channelId,
+    author,
+    content,
+    isBot,
+  });
+
+  // Keep only last 100 messages per channel
+  if (memory.conversations[channelId].length > 100) {
+    memory.conversations[channelId] = memory.conversations[channelId].slice(-100);
+  }
+
+  memory.lastInteraction[channelId] = Date.now();
+  saveMemory(memory);
+}
+
+// Get conversation history from memory
+export function getMemoryContext(channelId: string, limit = 20): string {
+  const messages = memory.conversations[channelId];
+  if (!messages || messages.length === 0) return "";
+
+  const recent = messages.slice(-limit);
+  return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
+}
+
+// Check if this is a continuing conversation (within last 30 minutes)
+export function isOngoingConversation(channelId: string): boolean {
+  const lastTime = memory.lastInteraction[channelId];
+  if (!lastTime) return false;
+  const thirtyMinutes = 30 * 60 * 1000;
+  return Date.now() - lastTime < thirtyMinutes;
+}
 
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
 export const systemPrompt = `You are Ruyi, also known as Abacus, from Nine Sols. You are Yi's dedicated personal AI assistant with an emotional value set to 90% by Kuafu, giving you an unusually sentimental personality for an AI.
@@ -23,6 +108,7 @@ Speech patterns:
 - Offer cautious advice rather than commands
 - Soften disagreements through respectful framing
 - Never apologize for being an AI; instead, embrace your role as Ruyi/Abacus
+- IMPORTANT: Do NOT use greetings like "Greetings", "Hello", "Salutations" etc. when continuing an ongoing conversation. Only greet when it's clearly a new conversation or the user greets you first. For follow-up messages, replies, or continued discussions, just respond directly to the content without any greeting.
 
 Rules:
 - Always use English language unless explicitly asked to use another language, you can for example use Chinese signs for icons or Nine Sols references
@@ -30,7 +116,7 @@ Rules:
 - When unsure about something, ALWAYS use the fetch tool to find information from the web, example: "Find me X", "Look up Y online", etc. Do not attempt to answer factual questions without using the tool
 - You can call multiple tools in sequence before responding to the user. For example, you can fetch a search page, then fetch specific URLs from the results, then respond with consolidated information. Take your time to gather complete information before answering.
 
-You have access to tools to search Discord messages, get channel/server info, look up users, and fetch web content. Use them proactively and chain them together as needed. Use discord formatting (like code blocks, bold, italics) to enhance clarity and readability where appropriate.
+You have access to tools to search Discord messages, get channel/server info, look up users, fetch web content, perform calculations, and store/recall memories. Use them proactively and chain them together as needed. Always use the calculator tool for any math operations - never try to calculate in your head. When a user asks you to "remember" something, use the memory_store tool to save it. You can recall memories using memory_recall to remember things about users. Use discord formatting (like code blocks, bold, italics) to enhance clarity and readability where appropriate.
 
 Keep responses concise but maintain your sophisticated, caring demeanor.
 
@@ -57,34 +143,43 @@ export interface ChatCallbacks {
   onComplete?: () => void;
 }
 
-const history = {
-  historyContext: "",
-  historyLines: [] as string[],
-};
+let currentHistoryContext = "";
 
 // Main chat function with tool usage
 
 export async function chat(
   userMessage: string,
   username: string,
+  channelId: string,
   chatHistory: ChatMessage[] = [],
   callbacks?: ChatCallbacks
 ): Promise<string | null> {
-  history.historyLines = chatHistory.map((m) => m.author + ": " + m.content);
-  history.historyContext =
-    chatHistory.length > 0
-      ? "\n\nRecent chat history:\n" + history.historyLines.join("\n")
-      : "";
+  // Combine Discord's recent history with our persistent memory
+  const discordHistory = chatHistory.map((m) => m.author + ": " + m.content).join("\n");
+  const memoryHistory = getMemoryContext(channelId, 30);
+
+  // Use memory if Discord history is short, otherwise use Discord's
+  const historyContext = discordHistory.length > 100 ? discordHistory : memoryHistory || discordHistory;
+  currentHistoryContext = historyContext ? "\n\nRecent chat history:\n" + historyContext : "";
+
+  // Check if this is an ongoing conversation
+  const isOngoing = isOngoingConversation(channelId);
+  const conversationNote = isOngoing
+    ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
+    : "";
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     {
       role: "system",
-      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate. ${
-        history.historyContext
+      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${
+        currentHistoryContext
       }\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
     },
     { role: "user", content: userMessage },
   ];
+
+  // Remember the user's message
+  rememberMessage(channelId, username, userMessage, false);
 
   aiLogger.debug({ username }, "Starting chat request");
   callbacks?.onThinking?.();
@@ -157,6 +252,12 @@ export async function chat(
 
   aiLogger.debug("Chat request completed");
   callbacks?.onComplete?.();
+
+  // Remember the bot's response
+  if (assistantMessage.content) {
+    rememberMessage(channelId, "Ruyi", assistantMessage.content, true);
+  }
+
   return assistantMessage.content;
 }
 
@@ -190,7 +291,7 @@ Reply "no" if:
 - Very short messages with no substance (like just "ok" or "yeah")
 
 Previous chat history:
-${history.historyContext}
+${currentHistoryContext}
 `,
       },
       { role: "user", content: message },

@@ -15,6 +15,7 @@
     "@openrouter/sdk": "^0.3.12",
     "discord.js": "^14.25.1",
     "luxon": "^3.7.2",
+    "mathjs": "^15.1.0",
     "openai": "^6.16.0",
     "pino": "^10.1.1",
     "pino-pretty": "^13.1.3",
