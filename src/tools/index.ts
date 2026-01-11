@@ -4,7 +4,12 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 export { setToolContext } from "./types";
 
 // Import tool definitions and implementations
-import { searchMessagesDefinition, searchMessages } from "./searchMessages";
+import {
+  searchMessagesDefinition,
+  reactToMessageDefinition,
+  searchMessages,
+  reactToMessage,
+} from "./searchMessages";
 import { channelInfoDefinition, getChannelInfo } from "./channelInfo";
 import { serverInfoDefinition, getServerInfo } from "./serverInfo";
 import { userInfoDefinition, getUserInfo } from "./userInfo";
@@ -17,6 +22,7 @@ import {
   memoryStoreOperation,
   memoryRecall,
 } from "./memory";
+import { reactionDefinition, addReaction } from "./reaction";
 
 // Collect all tool definitions
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -29,6 +35,8 @@ export const toolDefinitions: ChatCompletionTool[] = [
   calculatorDefinition,
   memoryStoreDefinition,
   memoryRecallDefinition,
+  reactionDefinition,
+  reactToMessageDefinition,
 ];
 
 // Execute a tool by name
@@ -39,8 +47,9 @@ export async function executeTool(
   switch (name) {
     case "search_messages":
       return await searchMessages(
-        args.query as string,
-        (args.limit as number) || 50
+        args.query as string | null,
+        args.author as string | null,
+        args.limit as number | null
       );
     case "get_channel_info":
       return getChannelInfo();
@@ -57,7 +66,11 @@ export async function executeTool(
         args.username as string | undefined
       );
     case "fetch":
-      return await getFetchData(args.urls as string[], args.priority as number);
+      return await getFetchData(
+        args.urls as string[],
+        args.priority as number,
+        args.part as number | undefined
+      );
     case "calculator":
       return calculate(args.expression as string);
     case "memory_store":
@@ -72,6 +85,13 @@ export async function executeTool(
       return memoryRecall(
         args.username as string | null,
         args.include_global !== false
+      );
+    case "add_reaction":
+      return await addReaction(args.emoji as string);
+    case "react_to_message":
+      return await reactToMessage(
+        args.message_id as string,
+        args.emoji as string
       );
     default:
       return JSON.stringify({ error: "Unknown tool: " + name });

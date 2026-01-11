@@ -52,15 +52,27 @@ function getStatusColor(status: StatusState["status"]): number {
   return 0xffaa00;
 }
 
+// Format elapsed time as human-readable string (1s, 1m 30s, 1h 5m, etc.)
+function formatElapsedTime(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
+}
+
 function buildStatusEmbed(state: StatusState): EmbedBuilder {
   const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
 
-  const embed = new EmbedBuilder()
-    .setTitle("Ruyi")
-    .setColor(getStatusColor(state.status))
-    .setTimestamp();
-
-  // Status field
+  // Build status text
   let statusText: string;
   switch (state.status) {
     case "thinking":
@@ -76,16 +88,17 @@ function buildStatusEmbed(state: StatusState): EmbedBuilder {
       statusText = "Error";
       break;
   }
-  embed.addFields({ name: "Status", value: statusText, inline: true });
-  embed.addFields({ name: "Time", value: `${elapsed}s`, inline: true });
 
-  // Tools used
+  // Build description with optional tools list
+  let description = `**${statusText}** • ${formatElapsedTime(elapsed)}`;
   if (state.toolsUsed.length > 0) {
-    const toolList = state.toolsUsed.map((t) => `\`${t}\``).join(", ");
-    embed.addFields({ name: "Tools Used", value: toolList, inline: false });
+    const toolList = state.toolsUsed.map((t) => `\`${t}\``).join(" ");
+    description += `\n${toolList}`;
   }
 
-  return embed;
+  return new EmbedBuilder()
+    .setColor(getStatusColor(state.status))
+    .setDescription(description);
 }
 
 // Message handlers
@@ -160,6 +173,41 @@ function createChatCallbacks(
       state.currentTool = undefined;
     },
   };
+}
+
+// Split message into chunks that fit Discord's 2000 character limit
+function splitMessage(text: string, maxLength = 2000): string[] {
+  if (text.length <= maxLength) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLength) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Try to split at a natural break point
+    let splitIndex = maxLength;
+
+    // Look for newline within the last 200 chars of the chunk
+    const newlineIndex = remaining.lastIndexOf("\n", maxLength);
+    if (newlineIndex > maxLength - 200) {
+      splitIndex = newlineIndex + 1;
+    } else {
+      // Look for space within the last 100 chars
+      const spaceIndex = remaining.lastIndexOf(" ", maxLength);
+      if (spaceIndex > maxLength - 100) {
+        splitIndex = spaceIndex + 1;
+      }
+    }
+
+    chunks.push(remaining.slice(0, splitIndex).trimEnd());
+    remaining = remaining.slice(splitIndex).trimStart();
+  }
+
+  return chunks;
 }
 
 // Get error message for OpenRouter API errors
@@ -280,10 +328,15 @@ async function handleAIChat(message: Message): Promise<void> {
     await deleteStatusEmbed();
 
     if (reply) {
-      const truncated =
-        reply.length > 2000 ? reply.slice(0, 1997) + "..." : reply;
-      await message.reply(truncated);
-      botLogger.info({ user, replyLength: reply.length }, "Sent reply");
+      const chunks = splitMessage(reply);
+      for (const [i, chunk] of chunks.entries()) {
+        if (i === 0) {
+          await message.reply(chunk);
+        } else if ("send" in message.channel) {
+          await message.channel.send(chunk);
+        }
+      }
+      botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
     } else {
       await message.reply("I was unable to generate a response.");
     }
