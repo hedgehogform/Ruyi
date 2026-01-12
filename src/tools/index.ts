@@ -4,12 +4,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 export { setToolContext } from "./types";
 
 // Import tool definitions and implementations
-import {
-  searchMessagesDefinition,
-  reactToMessageDefinition,
-  searchMessages,
-  reactToMessage,
-} from "./searchMessages";
+import { searchMessagesDefinition, searchMessages } from "./searchMessages";
 import { channelInfoDefinition, getChannelInfo } from "./channelInfo";
 import { serverInfoDefinition, getServerInfo } from "./serverInfo";
 import { userInfoDefinition, getUserInfo } from "./userInfo";
@@ -22,7 +17,10 @@ import {
   memoryStoreOperation,
   memoryRecall,
 } from "./memory";
-import { reactionDefinition, addReaction } from "./reaction";
+import { reactionDefinition, manageReaction } from "./reaction";
+import { pinDefinition, managePin } from "./pin";
+import { auditLogDefinition, getAuditLog } from "./auditLog";
+import { embedDefinition, sendEmbed } from "./embed";
 
 // Collect all tool definitions
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -36,7 +34,9 @@ export const toolDefinitions: ChatCompletionTool[] = [
   memoryStoreDefinition,
   memoryRecallDefinition,
   reactionDefinition,
-  reactToMessageDefinition,
+  pinDefinition,
+  auditLogDefinition,
+  embedDefinition,
 ];
 
 // Execute a tool by name
@@ -49,7 +49,8 @@ export async function executeTool(
       return await searchMessages(
         args.query as string | null,
         args.author as string | null,
-        args.limit as number | null
+        args.limit as number | null,
+        args.include_reactions as boolean | null
       );
     case "get_channel_info":
       return getChannelInfo();
@@ -86,12 +87,32 @@ export async function executeTool(
         args.username as string | null,
         args.include_global !== false
       );
-    case "add_reaction":
-      return await addReaction(args.emoji as string);
-    case "react_to_message":
-      return await reactToMessage(
-        args.message_id as string,
-        args.emoji as string
+    case "manage_reaction":
+      return await manageReaction(
+        args.action as "add" | "remove",
+        args.emoji as string,
+        args.message_id as string | null
+      );
+    case "manage_pin":
+      return await managePin(
+        args.action as "pin" | "unpin",
+        args.message_id as string | null
+      );
+    case "get_audit_log":
+      return await getAuditLog(
+        args.action_type as string | null,
+        args.user as string | null,
+        args.target_user as string | null,
+        args.limit as number | null
+      );
+    case "send_embed":
+      return await sendEmbed(
+        args.title as string | null,
+        args.description as string | null,
+        args.color as string | null,
+        args.fields as Array<{ name: string; value: string; inline?: boolean }> | null,
+        args.footer as string | null,
+        args.thumbnail as string | null
       );
     default:
       return JSON.stringify({ error: "Unknown tool: " + name });

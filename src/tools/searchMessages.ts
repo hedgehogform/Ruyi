@@ -7,7 +7,7 @@ export const searchMessagesDefinition: ChatCompletionTool = {
   function: {
     name: "search_messages",
     description:
-      "Search for messages in the current Discord channel. Use this to find specific messages to react to, reference, or quote. You can search by content, author, or get recent messages. Returns message IDs that can be used with react_to_message.",
+      "Search for messages in the current Discord channel. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction to add/remove reactions.",
     parameters: {
       type: "object",
       properties: {
@@ -26,37 +26,22 @@ export const searchMessagesDefinition: ChatCompletionTool = {
           description:
             "Maximum number of messages to return (1-50, default 10).",
         },
+        include_reactions: {
+          type: ["boolean", "null"],
+          description:
+            "Whether to include reaction details for each message. Default true.",
+        },
       },
-      required: ["query", "author", "limit"],
+      required: ["query", "author", "limit", "include_reactions"],
       additionalProperties: false,
     },
   },
 };
 
-export const reactToMessageDefinition: ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "react_to_message",
-    description:
-      "Add an emoji reaction to a specific message by its ID. Use search_messages first to get message IDs, or use add_reaction to react to the user's current message.",
-    parameters: {
-      type: "object",
-      properties: {
-        message_id: {
-          type: "string",
-          description: "The ID of the message to react to.",
-        },
-        emoji: {
-          type: "string",
-          description:
-            "The emoji to react with. Can be a unicode emoji (👍, ❤️, 🔥, etc.) or a custom emoji in the format <:name:id> or <a:name:id> for animated.",
-        },
-      },
-      required: ["message_id", "emoji"],
-      additionalProperties: false,
-    },
-  },
-};
+interface ReactionInfo {
+  emoji: string;
+  count: number;
+}
 
 interface FoundMessage {
   id: string;
@@ -64,12 +49,14 @@ interface FoundMessage {
   content: string;
   timestamp: number;
   url: string;
+  reactions?: ReactionInfo[];
 }
 
 export async function searchMessages(
   query: string | null,
   author: string | null,
-  limit: number | null
+  limit: number | null,
+  includeReactions: boolean | null = true
 ): Promise<string> {
   const ctx = getToolContext();
 
@@ -84,6 +71,7 @@ export async function searchMessages(
   }
 
   const searchLimit = Math.min(Math.max(limit ?? 10, 1), 50);
+  const showReactions = includeReactions !== false;
 
   try {
     // Fetch more messages than needed to allow filtering
@@ -110,14 +98,26 @@ export async function searchMessages(
       );
     }
 
-    // Take only the requested limit
-    const results: FoundMessage[] = filtered.slice(0, searchLimit).map((m) => ({
-      id: m.id,
-      author: m.author.displayName,
-      content: m.content.slice(0, 200) + (m.content.length > 200 ? "..." : ""),
-      timestamp: Math.floor(m.createdTimestamp / 1000),
-      url: m.url,
-    }));
+    // Take only the requested limit and build results
+    const results: FoundMessage[] = filtered.slice(0, searchLimit).map((m) => {
+      const result: FoundMessage = {
+        id: m.id,
+        author: m.author.displayName,
+        content: m.content.slice(0, 200) + (m.content.length > 200 ? "..." : ""),
+        timestamp: Math.floor(m.createdTimestamp / 1000),
+        url: m.url,
+      };
+
+      // Include reactions if requested
+      if (showReactions && m.reactions.cache.size > 0) {
+        result.reactions = m.reactions.cache.map((r) => ({
+          emoji: r.emoji.toString(),
+          count: r.count,
+        }));
+      }
+
+      return result;
+    });
 
     toolLogger.info(
       { query, author, found: results.length },
@@ -128,45 +128,12 @@ export async function searchMessages(
       messages: results,
       total: results.length,
       hint: results.length > 0
-        ? "Use react_to_message with a message ID to add a reaction, or reference messages using their URL"
+        ? "Use manage_reaction with the message ID to add/remove reactions"
         : "No messages found matching your criteria",
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to search messages");
     return JSON.stringify({ error: "Failed to search messages", details: errorMessage });
-  }
-}
-
-export async function reactToMessage(
-  messageId: string,
-  emoji: string
-): Promise<string> {
-  const ctx = getToolContext();
-
-  if (!ctx.channel) {
-    toolLogger.warn("No channel context available for react_to_message");
-    return JSON.stringify({ error: "No channel context available" });
-  }
-
-  const channel = ctx.channel;
-  if (!("messages" in channel)) {
-    return JSON.stringify({ error: "Cannot access messages in this channel type" });
-  }
-
-  try {
-    const message = await channel.messages.fetch(messageId);
-    await message.react(emoji);
-    toolLogger.info({ messageId, emoji }, "Added reaction to message");
-    return JSON.stringify({
-      success: true,
-      emoji,
-      messageId,
-      messageUrl: message.url,
-    });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    toolLogger.error({ error: errorMessage, messageId, emoji }, "Failed to react to message");
-    return JSON.stringify({ error: "Failed to add reaction", details: errorMessage });
   }
 }

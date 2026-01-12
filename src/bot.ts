@@ -130,6 +130,39 @@ async function checkShouldRespond(
   return true;
 }
 
+// Fetch the reply chain for a message (follows reply references recursively)
+async function fetchReplyChain(message: Message, maxDepth = 10): Promise<ChatMessage[]> {
+  const chain: ChatMessage[] = [];
+  let currentRef: { channelId: string; messageId: string } | null =
+    message.reference?.messageId
+      ? { channelId: message.channel.id, messageId: message.reference.messageId }
+      : null;
+  let depth = 0;
+
+  if (!("messages" in message.channel)) return chain;
+
+  while (currentRef && depth < maxDepth) {
+    try {
+      const referencedMessage = await message.channel.messages.fetch(currentRef.messageId);
+      chain.unshift({
+        author: referencedMessage.author.displayName,
+        content: referencedMessage.content.replaceAll(/<@!?\d+>/g, "").trim(),
+        isBot: referencedMessage.author.bot,
+        isReplyContext: true,
+      });
+      currentRef = referencedMessage.reference?.messageId
+        ? { channelId: referencedMessage.channel.id, messageId: referencedMessage.reference.messageId }
+        : null;
+      depth++;
+    } catch {
+      // Message was deleted or inaccessible
+      break;
+    }
+  }
+
+  return chain;
+}
+
 // Fetch recent chat history from channel
 async function fetchChatHistory(message: Message): Promise<ChatMessage[]> {
   const chatHistory: ChatMessage[] = [];
@@ -174,6 +207,9 @@ function createChatCallbacks(
     },
   };
 }
+
+// Tools that send their own messages (no text reply needed)
+const SELF_RESPONDING_TOOLS = new Set(["send_embed"]);
 
 // Split message into chunks that fit Discord's 2000 character limit
 function splitMessage(text: string, maxLength = 2000): string[] {
@@ -250,6 +286,31 @@ async function shouldBotRespond(
   }
 }
 
+// Fetch the referenced message if this is a reply
+async function fetchReferencedMessage(message: Message): Promise<Message | null> {
+  if (!message.reference?.messageId || !("messages" in message.channel)) {
+    return null;
+  }
+  try {
+    return await message.channel.messages.fetch(message.reference.messageId);
+  } catch {
+    return null; // Referenced message was deleted
+  }
+}
+
+// Send reply in chunks if needed
+async function sendReplyChunks(message: Message, reply: string, user: string): Promise<void> {
+  const chunks = splitMessage(reply);
+  for (const [i, chunk] of chunks.entries()) {
+    if (i === 0) {
+      await message.reply(chunk);
+    } else if ("send" in message.channel) {
+      await message.channel.send(chunk);
+    }
+  }
+  botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
+}
+
 async function handleAIChat(message: Message): Promise<void> {
   const isMentioned = message.mentions.has(client.user!);
   const isDM = message.channel.isDMBased();
@@ -260,13 +321,7 @@ async function handleAIChat(message: Message): Promise<void> {
   const user = message.author.displayName;
   const channelName = "name" in message.channel ? message.channel.name : "DM";
 
-  const shouldRespond = await shouldBotRespond(
-    content,
-    user,
-    channelName,
-    isMentioned,
-    isDM
-  );
+  const shouldRespond = await shouldBotRespond(content, user, channelName, isMentioned, isDM);
   if (!shouldRespond) return;
 
   if ("sendTyping" in message.channel) {
@@ -274,71 +329,58 @@ async function handleAIChat(message: Message): Promise<void> {
   }
   setTypingStatus(user);
 
-  const chatHistory = await fetchChatHistory(message);
-  botLogger.debug({ historyCount: chatHistory.length }, "Fetched chat history");
+  // Fetch context in parallel
+  const [replyChain, chatHistory, referencedMessage] = await Promise.all([
+    fetchReplyChain(message),
+    fetchChatHistory(message),
+    fetchReferencedMessage(message),
+  ]);
+
+  const combinedHistory = [...replyChain, ...chatHistory];
+  botLogger.debug(
+    { replyChainLength: replyChain.length, historyCount: chatHistory.length },
+    "Fetched message context"
+  );
 
   // Set tool context so tools can access Discord data
   const channel = "name" in message.channel ? message.channel : null;
-  setToolContext(message, channel as any, message.guild);
+  setToolContext(message, channel as any, message.guild, referencedMessage);
 
   // Create status state and embed
-  const state: StatusState = {
-    status: "thinking",
-    toolsUsed: [],
-    startTime: Date.now(),
-  };
-
-  const statusMessage = await message.reply({
-    embeds: [buildStatusEmbed(state)],
-  });
+  const state: StatusState = { status: "thinking", toolsUsed: [], startTime: Date.now() };
+  const statusMessage = await message.reply({ embeds: [buildStatusEmbed(state)] });
 
   const updateEmbed = async () => {
     try {
       await statusMessage.edit({ embeds: [buildStatusEmbed(state)] });
-    } catch {
-      // Message may have been deleted
-    }
+    } catch { /* Message may have been deleted */ }
   };
 
   const updateInterval = setInterval(() => {
-    if (state.status !== "complete" && state.status !== "error") {
-      updateEmbed();
-    }
+    if (state.status !== "complete" && state.status !== "error") updateEmbed();
   }, 1000);
 
   const deleteStatusEmbed = async () => {
     clearInterval(updateInterval);
     try {
       await statusMessage.delete();
-    } catch {
-      // Message may have been deleted already
-    }
+    } catch { /* Message may have been deleted already */ }
   };
 
   const callbacks = createChatCallbacks(state, updateEmbed);
 
   try {
-    const reply = await chat(
-      content,
-      user,
-      message.channel.id,
-      chatHistory,
-      callbacks
-    );
+    const reply = await chat(content, user, message.channel.id, combinedHistory, callbacks);
     await deleteStatusEmbed();
 
     if (reply) {
-      const chunks = splitMessage(reply);
-      for (const [i, chunk] of chunks.entries()) {
-        if (i === 0) {
-          await message.reply(chunk);
-        } else if ("send" in message.channel) {
-          await message.channel.send(chunk);
-        }
-      }
-      botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
+      await sendReplyChunks(message, reply, user);
     } else {
-      await message.reply("I was unable to generate a response.");
+      // Check if a self-responding tool was used (like send_embed)
+      const usedSelfRespondingTool = state.toolsUsed.some((t) => SELF_RESPONDING_TOOLS.has(t));
+      if (!usedSelfRespondingTool) {
+        await message.reply("I was unable to generate a response.");
+      }
     }
   } catch (error: any) {
     botLogger.error({ error, user }, "Failed to generate reply");

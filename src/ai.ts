@@ -143,13 +143,34 @@ CRITICAL - Links and URLs:
 You have access to tools to search Discord messages, get channel/server info, look up users, fetch web content, perform calculations, store/recall memories, and add emoji reactions. Use them proactively and chain them together as needed. Always use the calculator tool for any math operations - never try to calculate in your head. When a user asks you to "remember" something, use the memory_store tool to save it. You can recall memories using memory_recall to remember things about users.
 
 Reactions and Message Interactions:
-- Use the add_reaction tool to react to the user's CURRENT message with emojis.
-- Use find_message to search for past messages by content or author, then use react_to_message to react to them.
-- NEVER type out emojis in your text response when you want to react - ALWAYS use the reaction tools instead.
-- You can react with standard unicode emojis (👍, ❤️, 🎉, 😊, 🔥, etc.) or custom server emojis.
-- Feel free to add reactions to express emotions, acknowledge messages, or add personality to interactions.
-- You can add multiple reactions by calling the tools multiple times.
-- When referencing past messages, you can include their Discord URL to create a clickable link.
+IMPORTANT: When the user mentions a specific message (like "the 'hello' message" or "my last message"), you MUST use search_messages first to find it!
+- ALWAYS use search_messages FIRST when the user references a past message by content, author, or description.
+- search_messages returns message IDs and shows existing reactions on each message.
+- Then use manage_reaction with the actual message ID from the search results.
+
+Message targeting (for manage_reaction, manage_pin, etc.):
+- "replied" = when the user's Discord message is a REPLY to another message. Use this when:
+  - User says "this message", "this", "pin this", "react to this" while replying to something
+  - User says "the message I replied to" or similar
+  - The context shows they're referring to what they replied to
+- null = the user's CURRENT message (only use when they explicitly want to target their own message they just sent)
+- actual message ID = for any message found via search_messages
+
+IMPORTANT: If the user is REPLYING to a message and says "this message" or "pin this" or "react to this", they mean the message they REPLIED TO, not their current message. Use "replied" in this case!
+
+NEVER use "replied" when the user just DESCRIBES a message in text without actually replying to it. Use search_messages to find it first.
+Example: User says "add a reaction to the 'hello' message" (not replying) → use search_messages with query "hello", then use the found ID.
+
+- NEVER type out emojis in text - ALWAYS use manage_reaction.
+- You can react with unicode emojis (👍, ❤️, 🎉, 😊, 🔥) or custom server emojis.
+
+Embeds - Rich formatted messages:
+- Use send_embed for structured data like audit logs, search results, tables, lists, or any content that benefits from rich formatting.
+- After sending an embed, you MAY add a brief text response with additional context, insights, or a summary observation (e.g., "Looks like there's been a lot of activity today!" or "I notice most of these are role updates.")
+- NEVER repeat or duplicate the embed content in your text response. The embed already shows the data - don't list it again.
+- If you have nothing meaningful to add beyond the embed, respond with null/empty.
+- Embeds support fields (like table rows), colors, titles, descriptions, and footers.
+- Use inline fields for table-like column layouts.
 
 Formatting - Use Discord markdown to make responses readable:
 - Use # for main headings (h1), ## for subheadings (h2), ### for smaller sections (h3)
@@ -180,6 +201,7 @@ export interface ChatMessage {
   author: string;
   content: string;
   isBot: boolean;
+  isReplyContext?: boolean;
 }
 
 export interface ChatCallbacks {
@@ -200,13 +222,23 @@ export async function chat(
   chatHistory: ChatMessage[] = [],
   callbacks?: ChatCallbacks
 ): Promise<string | null> {
+  // Separate reply chain context from general chat history
+  const replyChainMessages = chatHistory.filter((m) => m.isReplyContext);
+  const regularHistory = chatHistory.filter((m) => !m.isReplyContext);
+
+  // Format reply chain with clear indication
+  const replyChainContext = replyChainMessages.length > 0
+    ? "\n\nReply chain (the user is replying to this conversation thread):\n" +
+      replyChainMessages.map((m) => m.author + ": " + m.content).join("\n")
+    : "";
+
   // Combine Discord's recent history with our persistent memory
-  const discordHistory = chatHistory.map((m) => m.author + ": " + m.content).join("\n");
+  const discordHistory = regularHistory.map((m) => m.author + ": " + m.content).join("\n");
   const memoryHistory = getMemoryContext(channelId, 30);
 
   // Use memory if Discord history is short, otherwise use Discord's
   const historyContext = discordHistory.length > 100 ? discordHistory : memoryHistory || discordHistory;
-  currentHistoryContext = historyContext ? "\n\nRecent chat history:\n" + historyContext : "";
+  currentHistoryContext = replyChainContext + (historyContext ? "\n\nRecent chat history:\n" + historyContext : "");
 
   // Check if this is an ongoing conversation
   const isOngoing = isOngoingConversation(channelId);
