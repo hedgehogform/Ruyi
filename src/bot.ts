@@ -174,7 +174,8 @@ async function handleAIChat(message: Message): Promise<void> {
       }
     }
   } catch (error) {
-    botLogger.error({ error, user }, "Failed to generate reply");
+    const err = error as { status?: number; code?: number; error?: { message?: string } };
+    botLogger.error({ status: err?.status || err?.code, error: err?.error?.message, user }, "Failed to generate reply");
     await deleteStatusEmbed();
     await message.reply(getErrorMessage(error));
   } finally {
