@@ -200,7 +200,10 @@ function buildSystemMessage(username: string, historyContext: string, isOngoing:
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
-  return `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${historyContext}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`;
+  const historyNote = historyContext
+    ? `${historyContext}\n\n(History is for context only. Respond ONLY to the user's current message below. Do NOT continue previous tasks unless explicitly asked.)`
+    : "";
+  return `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${historyNote}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`;
 }
 
 // Execute a single tool call and return the message to add
