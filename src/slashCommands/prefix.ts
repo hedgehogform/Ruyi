@@ -1,6 +1,7 @@
 import {
   SlashCommandBuilder,
   PermissionFlagsBits,
+  MessageFlags,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { getPrefix, setPrefix } from "../config";
@@ -22,7 +23,10 @@ export async function handlePrefixCommand(interaction: ChatInputCommandInteracti
   const newPrefix = interaction.options.getString("new_prefix");
 
   if (!newPrefix) {
-    await interaction.reply(`Current prefix: \`${getPrefix()}\``);
+    await interaction.reply({
+      content: `Current prefix: \`${getPrefix()}\``,
+      flags: MessageFlags.Ephemeral,
+    });
     return;
   }
 
@@ -30,5 +34,8 @@ export async function handlePrefixCommand(interaction: ChatInputCommandInteracti
   setPrefix(newPrefix);
 
   botLogger.info({ oldPrefix, newPrefix, user: interaction.user.displayName }, "Prefix changed");
-  await interaction.reply(`Prefix changed from \`${oldPrefix}\` to \`${newPrefix}\``);
+  await interaction.reply({
+    content: `Prefix changed from \`${oldPrefix}\` to \`${newPrefix}\``,
+    flags: MessageFlags.Ephemeral,
+  });
 }

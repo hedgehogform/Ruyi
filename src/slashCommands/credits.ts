@@ -1,6 +1,7 @@
 import {
   SlashCommandBuilder,
   EmbedBuilder,
+  MessageFlags,
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { botLogger } from "../logger";
@@ -54,7 +55,7 @@ export async function handleCreditsCommand(
     if (!keyResponse.ok) {
       await interaction.reply({
         content: `Failed to fetch credits: HTTP ${keyResponse.status}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -67,7 +68,7 @@ export async function handleCreditsCommand(
     if (keyData.error) {
       await interaction.reply({
         content: `Error: ${keyData.error.message ?? "Unknown error"}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -76,7 +77,7 @@ export async function handleCreditsCommand(
     if (!info) {
       await interaction.reply({
         content: "No credit information available.",
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
       return;
     }
@@ -120,14 +121,14 @@ export async function handleCreditsCommand(
       embed.setFooter({ text: "Free tier" });
     }
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     botLogger.error({ error: errorMessage }, "Failed to fetch credits");
     await interaction.reply({
       content: `Failed to fetch credits: ${errorMessage}`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 }
