@@ -19,7 +19,7 @@ export const fetchDefinition: ChatCompletionTool = {
   function: {
     name: "fetch",
     description:
-      "Search the web or fetch content from URLs. Use this for current events, facts, documentation, or any information that requires up-to-date data. Supports two modes: (1) Search mode - provide a search query to find information, (2) URL mode - provide specific URLs to fetch. For image URLs, returns them for visual analysis.",
+      "Search the web or fetch content from URLs. Use this for current events, facts, documentation, or any information that requires up-to-date data. Supports two modes: (1) Search mode - provide a search query to find information, (2) URL mode - provide specific URLs to fetch. For image URLs, returns them for visual analysis. You can call this tool multiple times with different queries to gather comprehensive information - don't hesitate to search again if results are incomplete or you need more details.",
     parameters: {
       type: "object",
       properties: {
