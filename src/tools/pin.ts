@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { resolveTargetMessage, formatError } from "./types";
+import { resolveTargetMessage, formatError } from "../utils/types";
 
 export const pinDefinition: ChatCompletionTool = {
   type: "function",
@@ -30,7 +30,7 @@ export const pinDefinition: ChatCompletionTool = {
 
 export async function managePin(
   action: "pin" | "unpin",
-  messageId: string | null
+  messageId: string | null,
 ): Promise<string> {
   const result = await resolveTargetMessage(messageId, "pin");
   if (!result.success) {
@@ -42,17 +42,25 @@ export async function managePin(
   try {
     if (action === "pin") {
       await targetMessage.pin();
-      toolLogger.info({ messageId: targetMessage.id, action }, "Pinned message");
+      toolLogger.info(
+        { messageId: targetMessage.id, action },
+        "Pinned message",
+      );
       return JSON.stringify({
         success: true,
         action: "pinned",
         messageId: targetMessage.id,
         messageUrl: targetMessage.url,
-        content: targetMessage.content.slice(0, 100) + (targetMessage.content.length > 100 ? "..." : ""),
+        content:
+          targetMessage.content.slice(0, 100) +
+          (targetMessage.content.length > 100 ? "..." : ""),
       });
     } else {
       await targetMessage.unpin();
-      toolLogger.info({ messageId: targetMessage.id, action }, "Unpinned message");
+      toolLogger.info(
+        { messageId: targetMessage.id, action },
+        "Unpinned message",
+      );
       return JSON.stringify({
         success: true,
         action: "unpinned",
@@ -62,7 +70,13 @@ export async function managePin(
     }
   } catch (error) {
     const errorMessage = formatError(error);
-    toolLogger.error({ error: errorMessage, action, messageId }, "Failed to manage pin");
-    return JSON.stringify({ error: "Failed to manage pin", details: errorMessage });
+    toolLogger.error(
+      { error: errorMessage, action, messageId },
+      "Failed to manage pin",
+    );
+    return JSON.stringify({
+      error: "Failed to manage pin",
+      details: errorMessage,
+    });
   }
 }

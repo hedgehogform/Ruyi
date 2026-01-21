@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 // Map readable action names to Discord AuditLogEvent values
 const actionTypeMap: Record<string, AuditLogEvent> = {
@@ -107,7 +107,8 @@ export const auditLogDefinition: ChatCompletionTool = {
         },
         limit: {
           type: ["number", "null"],
-          description: "Maximum number of entries to return (1-50, default 10).",
+          description:
+            "Maximum number of entries to return (1-50, default 10).",
         },
       },
       required: ["action_type", "user", "target_user", "limit"],
@@ -139,7 +140,11 @@ function getTargetType(target: unknown): string {
 }
 
 // Format the target based on its type
-function formatTarget(entry: GuildAuditLogsEntry): { name: string | null; id: string | null; type: string | null } {
+function formatTarget(entry: GuildAuditLogsEntry): {
+  name: string | null;
+  id: string | null;
+  type: string | null;
+} {
   const target = entry.target;
   if (!target) return { name: null, id: null, type: null };
 
@@ -176,7 +181,7 @@ export async function getAuditLog(
   actionType: string | null,
   user: string | null,
   targetUser: string | null,
-  limit: number | null
+  limit: number | null,
 ): Promise<string> {
   const { guild } = getToolContext();
 
@@ -219,7 +224,8 @@ export async function getAuditLog(
       const targetLower = targetUser.toLowerCase();
       entries = entries.filter((entry) => {
         const target = entry.target;
-        if (!target || typeof target !== "object" || !("username" in target)) return false;
+        if (!target || typeof target !== "object" || !("username" in target))
+          return false;
         const username = (target as { username?: string }).username;
         if (!username) return false;
         const displayName = (target as { displayName?: string }).displayName;
@@ -231,29 +237,31 @@ export async function getAuditLog(
     }
 
     // Build results
-    const results: AuditLogResult[] = entries.slice(0, searchLimit).map((entry) => {
-      const targetInfo = formatTarget(entry);
-      return {
-        id: entry.id,
-        action: getActionName(entry.action),
-        executor: entry.executor?.username ?? null,
-        executorId: entry.executor?.id ?? null,
-        target: targetInfo.name,
-        targetId: targetInfo.id,
-        targetType: targetInfo.type,
-        reason: entry.reason,
-        timestamp: Math.floor(entry.createdTimestamp / 1000),
-        changes: entry.changes.map((c) => ({
-          key: c.key,
-          old: c.old,
-          new: c.new,
-        })),
-      };
-    });
+    const results: AuditLogResult[] = entries
+      .slice(0, searchLimit)
+      .map((entry) => {
+        const targetInfo = formatTarget(entry);
+        return {
+          id: entry.id,
+          action: getActionName(entry.action),
+          executor: entry.executor?.username ?? null,
+          executorId: entry.executor?.id ?? null,
+          target: targetInfo.name,
+          targetId: targetInfo.id,
+          targetType: targetInfo.type,
+          reason: entry.reason,
+          timestamp: Math.floor(entry.createdTimestamp / 1000),
+          changes: entry.changes.map((c) => ({
+            key: c.key,
+            old: c.old,
+            new: c.new,
+          })),
+        };
+      });
 
     toolLogger.info(
       { actionType, user, targetUser, found: results.length },
-      "Audit log search complete"
+      "Audit log search complete",
     );
 
     return JSON.stringify({
@@ -266,17 +274,25 @@ export async function getAuditLog(
           : "No audit log entries found matching your criteria.",
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to fetch audit log");
 
     // Check for permission error
-    if (errorMessage.includes("Missing Permissions") || errorMessage.includes("VIEW_AUDIT_LOG")) {
+    if (
+      errorMessage.includes("Missing Permissions") ||
+      errorMessage.includes("VIEW_AUDIT_LOG")
+    ) {
       return JSON.stringify({
         error: "Missing VIEW_AUDIT_LOG permission",
-        details: "The bot needs the 'View Audit Log' permission to access audit logs.",
+        details:
+          "The bot needs the 'View Audit Log' permission to access audit logs.",
       });
     }
 
-    return JSON.stringify({ error: "Failed to fetch audit log", details: errorMessage });
+    return JSON.stringify({
+      error: "Failed to fetch audit log",
+      details: errorMessage,
+    });
   }
 }

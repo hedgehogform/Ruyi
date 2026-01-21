@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 export const embedDefinition: ChatCompletionTool = {
   type: "function",
@@ -172,7 +172,8 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(config.color);
 
   if (config.title) embed.setTitle(config.title.slice(0, 256));
-  if (config.description) embed.setDescription(config.description.slice(0, MAX_DESCRIPTION));
+  if (config.description)
+    embed.setDescription(config.description.slice(0, MAX_DESCRIPTION));
 
   if (config.fields && config.fields.length > 0) {
     for (const field of config.fields.slice(0, MAX_FIELDS_PER_EMBED)) {
@@ -184,7 +185,8 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
     }
   }
 
-  if (config.footer) embed.setFooter({ text: config.footer.slice(0, MAX_FOOTER) });
+  if (config.footer)
+    embed.setFooter({ text: config.footer.slice(0, MAX_FOOTER) });
   if (config.thumbnail) embed.setThumbnail(config.thumbnail);
   if (config.showTimestamp) embed.setTimestamp();
 
@@ -192,7 +194,10 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
 }
 
 // Get continuation title
-function getContinuationTitle(title: string | null, isFirst: boolean): string | null {
+function getContinuationTitle(
+  title: string | null,
+  isFirst: boolean,
+): string | null {
   if (isFirst) return title;
   return title ? `${title} (cont.)` : null;
 }
@@ -204,11 +209,14 @@ function buildMultipleEmbeds(
   description: string | null,
   fields: EmbedField[] | null,
   footer: string | null,
-  thumbnail: string | null
+  thumbnail: string | null,
 ): EmbedBuilder[] {
   const embeds: EmbedBuilder[] = [];
-  const descriptionChunks: (string | null)[] = description ? chunkDescription(description) : [];
-  const fieldChunks: EmbedField[][] = fields && fields.length > 0 ? chunkFields(fields) : [];
+  const descriptionChunks: (string | null)[] = description
+    ? chunkDescription(description)
+    : [];
+  const fieldChunks: EmbedField[][] =
+    fields && fields.length > 0 ? chunkFields(fields) : [];
   const totalParts = Math.max(descriptionChunks.length, fieldChunks.length, 1);
 
   let partIndex = 0;
@@ -217,19 +225,22 @@ function buildMultipleEmbeds(
   for (const descChunk of descriptionChunks) {
     const isFirst = partIndex === 0;
     const isLast = partIndex === totalParts - 1;
-    const fieldsForThisPart = partIndex === descriptionChunks.length - 1 && fieldChunks.length > 0
-      ? fieldChunks.shift() ?? null
-      : null;
+    const fieldsForThisPart =
+      partIndex === descriptionChunks.length - 1 && fieldChunks.length > 0
+        ? (fieldChunks.shift() ?? null)
+        : null;
 
-    embeds.push(buildEmbed({
-      color,
-      title: getContinuationTitle(title, isFirst),
-      description: descChunk,
-      fields: fieldsForThisPart,
-      footer: isLast ? footer : null,
-      thumbnail: isFirst ? thumbnail : null,
-      showTimestamp: isLast,
-    }));
+    embeds.push(
+      buildEmbed({
+        color,
+        title: getContinuationTitle(title, isFirst),
+        description: descChunk,
+        fields: fieldsForThisPart,
+        footer: isLast ? footer : null,
+        thumbnail: isFirst ? thumbnail : null,
+        showTimestamp: isLast,
+      }),
+    );
     partIndex++;
   }
 
@@ -237,15 +248,17 @@ function buildMultipleEmbeds(
   for (const fieldChunk of fieldChunks) {
     const isLast = partIndex === totalParts - 1;
 
-    embeds.push(buildEmbed({
-      color,
-      title: getContinuationTitle(title, false),
-      description: null,
-      fields: fieldChunk,
-      footer: isLast ? footer : null,
-      thumbnail: null,
-      showTimestamp: isLast,
-    }));
+    embeds.push(
+      buildEmbed({
+        color,
+        title: getContinuationTitle(title, false),
+        description: null,
+        fields: fieldChunk,
+        footer: isLast ? footer : null,
+        thumbnail: null,
+        showTimestamp: isLast,
+      }),
+    );
     partIndex++;
   }
 
@@ -253,9 +266,13 @@ function buildMultipleEmbeds(
 }
 
 // Check if content needs multiple embeds
-function needsMultipleEmbeds(fields: EmbedField[] | null, description: string | null): boolean {
+function needsMultipleEmbeds(
+  fields: EmbedField[] | null,
+  description: string | null,
+): boolean {
   const tooManyFields = fields !== null && fields.length > MAX_FIELDS_PER_EMBED;
-  const descriptionTooLong = description !== null && description.length > MAX_DESCRIPTION;
+  const descriptionTooLong =
+    description !== null && description.length > MAX_DESCRIPTION;
   return tooManyFields || descriptionTooLong;
 }
 
@@ -265,7 +282,7 @@ export async function sendEmbed(
   color: string | null,
   fields: EmbedField[] | null,
   footer: string | null,
-  thumbnail: string | null
+  thumbnail: string | null,
 ): Promise<string> {
   const ctx = getToolContext();
 
@@ -276,7 +293,9 @@ export async function sendEmbed(
 
   const channel = ctx.channel;
   if (!("send" in channel)) {
-    return JSON.stringify({ error: "Cannot send messages in this channel type" });
+    return JSON.stringify({
+      error: "Cannot send messages in this channel type",
+    });
   }
 
   try {
@@ -284,17 +303,26 @@ export async function sendEmbed(
     let embeds: EmbedBuilder[];
 
     if (needsMultipleEmbeds(fields, description)) {
-      embeds = buildMultipleEmbeds(parsedColor, title, description, fields, footer, thumbnail);
-    } else {
-      embeds = [buildEmbed({
-        color: parsedColor,
+      embeds = buildMultipleEmbeds(
+        parsedColor,
         title,
         description,
         fields,
         footer,
         thumbnail,
-        showTimestamp: true,
-      })];
+      );
+    } else {
+      embeds = [
+        buildEmbed({
+          color: parsedColor,
+          title,
+          description,
+          fields,
+          footer,
+          thumbnail,
+          showTimestamp: true,
+        }),
+      ];
     }
 
     // Send embeds (Discord allows up to 10 embeds per message)
@@ -304,7 +332,7 @@ export async function sendEmbed(
 
     toolLogger.info(
       { title, fieldCount: fields?.length ?? 0, embedCount: embeds.length },
-      "Sent embed message(s)"
+      "Sent embed message(s)",
     );
 
     return JSON.stringify({
@@ -314,8 +342,12 @@ export async function sendEmbed(
       embedCount: embeds.length,
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to send embed");
-    return JSON.stringify({ error: "Failed to send embed", details: errorMessage });
+    return JSON.stringify({
+      error: "Failed to send embed",
+      details: errorMessage,
+    });
   }
 }

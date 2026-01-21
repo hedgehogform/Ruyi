@@ -1,15 +1,26 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext, resolveTargetMessage, formatError } from "./types";
+import {
+  getToolContext,
+  resolveTargetMessage,
+  formatError,
+} from "../utils/types";
 
 // Find a reaction by emoji (handles unicode and custom emojis)
-function findReaction(message: Message, emoji: string): MessageReaction | undefined {
+function findReaction(
+  message: Message,
+  emoji: string,
+): MessageReaction | undefined {
   return message.reactions.cache.find((r) => {
     const emojiStr = r.emoji.toString();
     const emojiName = r.emoji.name;
     const emojiId = r.emoji.id;
-    return emojiStr === emoji || emojiName === emoji || (emojiId && emoji.includes(emojiId));
+    return (
+      emojiStr === emoji ||
+      emojiName === emoji ||
+      (emojiId && emoji.includes(emojiId))
+    );
   });
 }
 
@@ -47,7 +58,7 @@ export const reactionDefinition: ChatCompletionTool = {
 export async function manageReaction(
   action: "add" | "remove",
   emoji: string,
-  messageId: string | null
+  messageId: string | null,
 ): Promise<string> {
   const result = await resolveTargetMessage(messageId, "reaction");
   if (!result.success) {
@@ -60,7 +71,10 @@ export async function manageReaction(
   try {
     if (action === "add") {
       await targetMessage.react(emoji);
-      toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Added reaction");
+      toolLogger.info(
+        { emoji, messageId: targetMessage.id, action },
+        "Added reaction",
+      );
       return JSON.stringify({
         success: true,
         action: "added",
@@ -82,7 +96,9 @@ export async function manageReaction(
     const reaction = findReaction(freshMessage, emoji);
 
     if (!reaction) {
-      const availableReactions = freshMessage.reactions.cache.map((r) => r.emoji.toString()).join(", ");
+      const availableReactions = freshMessage.reactions.cache
+        .map((r) => r.emoji.toString())
+        .join(", ");
       return JSON.stringify({
         error: "Reaction not found on this message",
         emoji,
@@ -92,7 +108,10 @@ export async function manageReaction(
     }
 
     await reaction.users.remove(botUserId);
-    toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Removed reaction");
+    toolLogger.info(
+      { emoji, messageId: targetMessage.id, action },
+      "Removed reaction",
+    );
     return JSON.stringify({
       success: true,
       action: "removed",
@@ -102,7 +121,13 @@ export async function manageReaction(
     });
   } catch (error) {
     const errorMessage = formatError(error);
-    toolLogger.error({ error: errorMessage, emoji, action, messageId }, "Failed to manage reaction");
-    return JSON.stringify({ error: "Failed to manage reaction", details: errorMessage });
+    toolLogger.error(
+      { error: errorMessage, emoji, action, messageId },
+      "Failed to manage reaction",
+    );
+    return JSON.stringify({
+      error: "Failed to manage reaction",
+      details: errorMessage,
+    });
   }
 }

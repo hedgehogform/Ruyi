@@ -1,7 +1,7 @@
 import type { ColorResolvable, Guild, Role, GuildMember } from "discord.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 function parseColor(color: string | undefined): ColorResolvable | undefined {
   if (!color) return undefined;
@@ -10,20 +10,20 @@ function parseColor(color: string | undefined): ColorResolvable | undefined {
 
 function findRole(guild: Guild, roleName: string): Role | undefined {
   return guild.roles.cache.find(
-    (r) => r.name.toLowerCase() === roleName.toLowerCase()
+    (r) => r.name.toLowerCase() === roleName.toLowerCase(),
   );
 }
 
 async function findMember(
   guild: Guild,
-  username: string
+  username: string,
 ): Promise<GuildMember | undefined> {
   const members = await guild.members.fetch({ query: username, limit: 10 });
   return (
     members.find(
       (m) =>
         m.user.username.toLowerCase() === username.toLowerCase() ||
-        m.displayName.toLowerCase() === username.toLowerCase()
+        m.displayName.toLowerCase() === username.toLowerCase(),
     ) || members.first()
   );
 }
@@ -71,7 +71,7 @@ export const manageRoleDefinition: ChatCompletionTool = {
 async function createRole(
   guild: Guild,
   roleName: string,
-  color?: string
+  color?: string,
 ): Promise<string> {
   if (findRole(guild, roleName)) {
     return JSON.stringify({ error: `Role "${roleName}" already exists` });
@@ -83,7 +83,10 @@ async function createRole(
     reason: "Created by Ruyi bot",
   });
 
-  toolLogger.info({ role: newRole.name, color: newRole.hexColor }, "Created role");
+  toolLogger.info(
+    { role: newRole.name, color: newRole.hexColor },
+    "Created role",
+  );
   return JSON.stringify({
     success: true,
     action: "created",
@@ -95,7 +98,7 @@ async function editRole(
   guild: Guild,
   roleName: string,
   newName?: string,
-  color?: string
+  color?: string,
 ): Promise<string> {
   const role = findRole(guild, roleName);
   if (!role) {
@@ -125,7 +128,7 @@ async function editRole(
 async function assignRole(
   guild: Guild,
   roleName: string,
-  username?: string
+  username?: string,
 ): Promise<string> {
   if (!username) {
     return JSON.stringify({ error: "Username required for assign action" });
@@ -149,7 +152,10 @@ async function assignRole(
 
   await member.roles.add(role, "Assigned by Ruyi bot");
 
-  toolLogger.info({ role: role.name, user: member.displayName }, "Assigned role");
+  toolLogger.info(
+    { role: role.name, user: member.displayName },
+    "Assigned role",
+  );
   return JSON.stringify({
     success: true,
     action: "assigned",
@@ -161,7 +167,7 @@ async function assignRole(
 async function removeRole(
   guild: Guild,
   roleName: string,
-  username?: string
+  username?: string,
 ): Promise<string> {
   if (!username) {
     return JSON.stringify({ error: "Username required for remove action" });
@@ -185,7 +191,10 @@ async function removeRole(
 
   await member.roles.remove(role, "Removed by Ruyi bot");
 
-  toolLogger.info({ role: role.name, user: member.displayName }, "Removed role");
+  toolLogger.info(
+    { role: role.name, user: member.displayName },
+    "Removed role",
+  );
   return JSON.stringify({
     success: true,
     action: "removed",
@@ -199,14 +208,17 @@ export async function manageRole(
   roleName: string,
   newName?: string,
   color?: string,
-  username?: string
+  username?: string,
 ): Promise<string> {
   const { guild } = getToolContext();
   if (!guild) {
     toolLogger.warn("manage_role called without guild context");
     return JSON.stringify({ error: "Not in a server" });
   }
-  toolLogger.debug({ action, roleName, newName, color, username }, "Managing role");
+  toolLogger.debug(
+    { action, roleName, newName, color, username },
+    "Managing role",
+  );
 
   try {
     switch (action) {

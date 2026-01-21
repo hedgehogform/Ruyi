@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 export const serverInfoDefinition: ChatCompletionTool = {
   type: "function",

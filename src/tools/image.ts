@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 export const generateImageDefinition: ChatCompletionTool = {
   type: "function",
@@ -54,7 +54,11 @@ interface ImageGenerationResponse {
 }
 
 // Build request body for image generation API
-function buildRequestBody(prompt: string, aspectRatio: string | null, imageSize: string | null): Record<string, unknown> {
+function buildRequestBody(
+  prompt: string,
+  aspectRatio: string | null,
+  imageSize: string | null,
+): Record<string, unknown> {
   const requestBody: Record<string, unknown> = {
     model: "google/gemini-3-pro-image-preview",
     messages: [{ role: "user", content: prompt }],
@@ -72,7 +76,11 @@ function buildRequestBody(prompt: string, aspectRatio: string | null, imageSize:
 }
 
 // Extract and validate image data from API response
-function extractImageData(data: ImageGenerationResponse): { error?: string; imageUrl?: string; content?: string | null } {
+function extractImageData(data: ImageGenerationResponse): {
+  error?: string;
+  imageUrl?: string;
+  content?: string | null;
+} {
   if (data.error) {
     return { error: data.error.message ?? "Unknown error" };
   }
@@ -93,7 +101,11 @@ function extractImageData(data: ImageGenerationResponse): { error?: string; imag
 }
 
 // Parse base64 image data from URL
-function parseBase64Image(imageUrl: string): { error?: string; format?: string; buffer?: Buffer } {
+function parseBase64Image(imageUrl: string): {
+  error?: string;
+  format?: string;
+  buffer?: Buffer;
+} {
   const base64Match = /^data:image\/(\w+);base64,(.+)$/.exec(imageUrl);
   if (!base64Match) {
     return { error: "Invalid image data format received" };
@@ -135,23 +147,34 @@ export async function generateImage(
     return JSON.stringify({ error: "No valid channel context available" });
   }
 
-  const channel = ctx.channel as { send: (options: unknown) => Promise<unknown> };
+  const channel = ctx.channel as {
+    send: (options: unknown) => Promise<unknown>;
+  };
   toolLogger.info({ prompt, aspectRatio, imageSize }, "Generating image");
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
-        "Content-Type": "application/json",
+    const response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(buildRequestBody(prompt, aspectRatio, imageSize)),
       },
-      body: JSON.stringify(buildRequestBody(prompt, aspectRatio, imageSize)),
-    });
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      toolLogger.error({ status: response.status, error: errorText }, "Image generation API error");
-      return JSON.stringify({ error: `Image generation failed with status ${response.status}`, details: errorText });
+      toolLogger.error(
+        { status: response.status, error: errorText },
+        "Image generation API error",
+      );
+      return JSON.stringify({
+        error: `Image generation failed with status ${response.status}`,
+        details: errorText,
+      });
     }
 
     const data = (await response.json()) as ImageGenerationResponse;
@@ -159,23 +182,44 @@ export async function generateImage(
 
     if (extracted.error) {
       toolLogger.error({ error: extracted.error }, "Image extraction failed");
-      return JSON.stringify({ error: "Image generation failed", details: extracted.error });
+      return JSON.stringify({
+        error: "Image generation failed",
+        details: extracted.error,
+      });
     }
 
     const parsed = parseBase64Image(extracted.imageUrl!);
     if (parsed.error) {
-      toolLogger.error({ imageUrl: extracted.imageUrl?.slice(0, 100) }, parsed.error);
+      toolLogger.error(
+        { imageUrl: extracted.imageUrl?.slice(0, 100) },
+        parsed.error,
+      );
       return JSON.stringify({ error: parsed.error });
     }
 
     await sendImageToChannel(channel, parsed.buffer!, parsed.format!, prompt);
 
-    toolLogger.info({ prompt: prompt.slice(0, 50), format: parsed.format, size: parsed.buffer!.length }, "Image generated and sent");
+    toolLogger.info(
+      {
+        prompt: prompt.slice(0, 50),
+        format: parsed.format,
+        size: parsed.buffer!.length,
+      },
+      "Image generated and sent",
+    );
 
-    return JSON.stringify({ success: true, format: parsed.format, description: extracted.content ?? null });
+    return JSON.stringify({
+      success: true,
+      format: parsed.format,
+      description: extracted.content ?? null,
+    });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to generate image");
-    return JSON.stringify({ error: "Failed to generate image", details: errorMessage });
+    return JSON.stringify({
+      error: "Failed to generate image",
+      details: errorMessage,
+    });
   }
 }

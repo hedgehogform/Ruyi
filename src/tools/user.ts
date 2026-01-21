@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 
 export const userInfoDefinition: ChatCompletionTool = {
   type: "function",
@@ -35,7 +35,7 @@ export async function getUserInfo(username: string): Promise<string> {
       members.find(
         (m) =>
           m.user.username.toLowerCase() === username.toLowerCase() ||
-          m.displayName.toLowerCase() === username.toLowerCase()
+          m.displayName.toLowerCase() === username.toLowerCase(),
       ) || members.first();
 
     if (!member) {
@@ -54,7 +54,7 @@ export async function getUserInfo(username: string): Promise<string> {
         createdTimestamp: user.createdTimestamp,
         createdAt: user.createdAt?.toISOString(),
       },
-      "Raw timestamps"
+      "Raw timestamps",
     );
 
     return JSON.stringify({

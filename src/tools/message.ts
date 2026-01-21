@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext } from "../utils/types";
 import { ChannelType, TextChannel, Message } from "discord.js";
 
 export const searchMessagesDefinition: ChatCompletionTool = {
@@ -149,7 +149,10 @@ async function getChannelsToSearch(
     const textChannels = channels
       .filter((c): c is TextChannel => c?.type === ChannelType.GuildText)
       .map((c) => c);
-    toolLogger.info({ channelCount: textChannels.length }, "Searching all channels");
+    toolLogger.info(
+      { channelCount: textChannels.length },
+      "Searching all channels",
+    );
     return textChannels;
   }
 
@@ -183,7 +186,8 @@ function buildFoundMessage(
   const result: FoundMessage = {
     id: msg.id,
     author: msg.author.displayName,
-    content: msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
+    content:
+      msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
     timestamp: Math.floor(msg.createdTimestamp / 1000),
     url: msg.url,
   };
@@ -216,12 +220,15 @@ async function searchChannel(
   const remaining = searchLimit - existingCount;
   if (remaining <= 0) return results;
 
-  const fetchLimit = query || author ? Math.min(searchLimit * 5, 100) : searchLimit;
+  const fetchLimit =
+    query || author ? Math.min(searchLimit * 5, 100) : searchLimit;
   const messages = await channel.messages.fetch({ limit: fetchLimit });
   const filtered = filterMessages([...messages.values()], author, query);
 
   for (const msg of filtered.slice(0, remaining)) {
-    results.push(buildFoundMessage(msg, showReactions, includeChannel, channel.name));
+    results.push(
+      buildFoundMessage(msg, showReactions, includeChannel, channel.name),
+    );
   }
 
   return results;
@@ -238,14 +245,20 @@ export async function searchMessages(
   const ctx = getToolContext();
 
   if (!ctx.guild && searchAllChannels) {
-    return JSON.stringify({ error: "Cannot search all channels outside of a server" });
+    return JSON.stringify({
+      error: "Cannot search all channels outside of a server",
+    });
   }
 
   const searchLimit = Math.min(Math.max(limit ?? 10, 1), 100);
   const showReactions = includeReactions !== false;
 
   try {
-    const channelsResult = await getChannelsToSearch(channelName, searchAllChannels, ctx);
+    const channelsResult = await getChannelsToSearch(
+      channelName,
+      searchAllChannels,
+      ctx,
+    );
     if (typeof channelsResult === "string") {
       return JSON.stringify({ error: channelsResult });
     }
@@ -255,14 +268,26 @@ export async function searchMessages(
 
     for (const channel of channelsResult) {
       const channelResults = await searchChannel(
-        channel, query, author, searchLimit, showReactions, includeChannel, allResults.length,
+        channel,
+        query,
+        author,
+        searchLimit,
+        showReactions,
+        includeChannel,
+        allResults.length,
       );
       allResults.push(...channelResults);
       if (allResults.length >= searchLimit) break;
     }
 
     toolLogger.info(
-      { query, author, channelName, searchAllChannels, found: allResults.length },
+      {
+        query,
+        author,
+        channelName,
+        searchAllChannels,
+        found: allResults.length,
+      },
       "Message search complete",
     );
 
@@ -275,9 +300,13 @@ export async function searchMessages(
           : "No messages found matching your criteria",
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to search messages");
-    return JSON.stringify({ error: "Failed to search messages", details: errorMessage });
+    return JSON.stringify({
+      error: "Failed to search messages",
+      details: errorMessage,
+    });
   }
 }
 
@@ -317,7 +346,9 @@ async function performDeletion(
   messages: Message[],
 ): Promise<number> {
   const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
-  const recentMessages = messages.filter((m) => m.createdTimestamp > twoWeeksAgo);
+  const recentMessages = messages.filter(
+    (m) => m.createdTimestamp > twoWeeksAgo,
+  );
   const oldMessages = messages.filter((m) => m.createdTimestamp <= twoWeeksAgo);
 
   let deletedCount = 0;
@@ -353,7 +384,9 @@ export async function deleteMessages(
   const ctx = getToolContext();
 
   if (!ctx.channel || !("messages" in ctx.channel)) {
-    return JSON.stringify({ error: "No valid channel context for message deletion" });
+    return JSON.stringify({
+      error: "No valid channel context for message deletion",
+    });
   }
 
   const channel = ctx.channel;
@@ -364,9 +397,16 @@ export async function deleteMessages(
     if (messageIds && messageIds.length > 0) {
       messagesToDelete = await fetchMessagesByIds(channel, messageIds);
     } else if (count && count > 0) {
-      messagesToDelete = await fetchFilteredMessages(channel, count, author, contains);
+      messagesToDelete = await fetchFilteredMessages(
+        channel,
+        count,
+        author,
+        contains,
+      );
     } else {
-      return JSON.stringify({ error: "Must specify either message_ids or count" });
+      return JSON.stringify({
+        error: "Must specify either message_ids or count",
+      });
     }
 
     if (messagesToDelete.length === 0) {
@@ -375,10 +415,7 @@ export async function deleteMessages(
 
     const deletedCount = await performDeletion(channel, messagesToDelete);
 
-    toolLogger.info(
-      { deletedCount, author, contains },
-      "Messages deleted",
-    );
+    toolLogger.info({ deletedCount, author, contains }, "Messages deleted");
 
     return JSON.stringify({
       success: true,
@@ -386,8 +423,12 @@ export async function deleteMessages(
       message: `Deleted ${deletedCount} message${deletedCount === 1 ? "" : "s"}`,
     });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     toolLogger.error({ error: errorMessage }, "Failed to delete messages");
-    return JSON.stringify({ error: "Failed to delete messages", details: errorMessage });
+    return JSON.stringify({
+      error: "Failed to delete messages",
+      details: errorMessage,
+    });
   }
 }

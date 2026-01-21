@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 // Re-export context management
-export { setToolContext } from "./types";
+export { setToolContext } from "../utils/types";
 
 // Import tool definitions and implementations
 import {
