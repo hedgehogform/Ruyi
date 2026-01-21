@@ -222,7 +222,9 @@ export async function deleteMessageFromDb(
       { $pull: { messages: { messageId } } },
     );
     if (result.modifiedCount > 0) {
-      syncLogger.debug({ channelId, messageId }, "Deleted message from DB");
+      syncLogger.info({ channelId, messageId }, "Deleted message from DB (event)");
+    } else {
+      syncLogger.debug({ channelId, messageId }, "Message not found in DB (may be legacy or not tracked)");
     }
   } catch (error) {
     syncLogger.error(

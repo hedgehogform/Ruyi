@@ -1,6 +1,9 @@
-import { EmbedBuilder, type Message } from "discord.js";
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  type ChatInputCommandInteraction,
+} from "discord.js";
 import { botLogger } from "../logger";
-import { getPrefix } from "../config";
 
 interface KeyInfoResponse {
   data?: {
@@ -25,38 +28,57 @@ interface CreditsResponse {
   error?: { message?: string };
 }
 
-export async function handleCredits(message: Message): Promise<boolean> {
-  if (message.content !== `${getPrefix()}credits`) return false;
+export const creditsCommand = new SlashCommandBuilder()
+  .setName("credits")
+  .setDescription("View OpenRouter API credits and usage");
 
-  botLogger.debug({ user: message.author.displayName }, "Credits command");
+export async function handleCreditsCommand(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  botLogger.debug({ user: interaction.user.displayName }, "Credits command");
 
   try {
     const keyHeaders = { Authorization: `Bearer ${Bun.env.MODEL_TOKEN}` };
-    const creditsHeaders = { Authorization: `Bearer ${Bun.env.PROVISIONING_KEY ?? Bun.env.MODEL_TOKEN}` };
+    const creditsHeaders = {
+      Authorization: `Bearer ${Bun.env.PROVISIONING_KEY ?? Bun.env.MODEL_TOKEN}`,
+    };
 
     // Fetch both endpoints in parallel
     const [keyResponse, creditsResponse] = await Promise.all([
       fetch("https://openrouter.ai/api/v1/key", { headers: keyHeaders }),
-      fetch("https://openrouter.ai/api/v1/credits", { headers: creditsHeaders }),
+      fetch("https://openrouter.ai/api/v1/credits", {
+        headers: creditsHeaders,
+      }),
     ]);
 
     if (!keyResponse.ok) {
-      await message.reply(`Failed to fetch credits: HTTP ${keyResponse.status}`);
-      return true;
+      await interaction.reply({
+        content: `Failed to fetch credits: HTTP ${keyResponse.status}`,
+        ephemeral: true,
+      });
+      return;
     }
 
     const keyData = (await keyResponse.json()) as KeyInfoResponse;
-    const creditsData = creditsResponse.ok ? ((await creditsResponse.json()) as CreditsResponse) : null;
+    const creditsData = creditsResponse.ok
+      ? ((await creditsResponse.json()) as CreditsResponse)
+      : null;
 
     if (keyData.error) {
-      await message.reply(`Error: ${keyData.error.message ?? "Unknown error"}`);
-      return true;
+      await interaction.reply({
+        content: `Error: ${keyData.error.message ?? "Unknown error"}`,
+        ephemeral: true,
+      });
+      return;
     }
 
     const info = keyData.data;
     if (!info) {
-      await message.reply("No credit information available.");
-      return true;
+      await interaction.reply({
+        content: "No credit information available.",
+        ephemeral: true,
+      });
+      return;
     }
 
     const usageDaily = info.usage_daily ?? 0;
@@ -70,12 +92,15 @@ export async function handleCredits(message: Message): Promise<boolean> {
 
     const embed = new EmbedBuilder()
       .setTitle("OpenRouter Credits")
+      .setURL("https://openrouter.ai/settings/credits")
       .setColor(0x9b59b6)
       .setTimestamp();
 
     if (totalCredits > 0) {
       const percentUsed = (totalUsage / totalCredits) * 100;
-      embed.setDescription(`**Balance:** $${balance.toFixed(2)} / $${totalCredits.toFixed(2)} (${percentUsed.toFixed(1)}% used)`);
+      embed.setDescription(
+        `**Balance:** $${balance.toFixed(2)} / $${totalCredits.toFixed(2)} (${percentUsed.toFixed(1)}% used)`,
+      );
     } else {
       embed.setDescription(`**Balance:** $${balance.toFixed(2)}`);
     }
@@ -83,20 +108,26 @@ export async function handleCredits(message: Message): Promise<boolean> {
     embed.addFields(
       { name: "Today", value: `$${usageDaily.toFixed(4)}`, inline: true },
       { name: "This Week", value: `$${usageWeekly.toFixed(4)}`, inline: true },
-      { name: "This Month", value: `$${usageMonthly.toFixed(4)}`, inline: true },
-      { name: "All Time", value: `$${totalUsage.toFixed(4)}`, inline: true }
+      {
+        name: "This Month",
+        value: `$${usageMonthly.toFixed(4)}`,
+        inline: true,
+      },
+      { name: "All Time", value: `$${totalUsage.toFixed(4)}`, inline: true },
     );
 
     if (info.is_free_tier) {
       embed.setFooter({ text: "Free tier" });
     }
 
-    await message.reply({ embeds: [embed] });
+    await interaction.reply({ embeds: [embed], ephemeral: true });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     botLogger.error({ error: errorMessage }, "Failed to fetch credits");
-    await message.reply(`Failed to fetch credits: ${errorMessage}`);
+    await interaction.reply({
+      content: `Failed to fetch credits: ${errorMessage}`,
+      ephemeral: true,
+    });
   }
-
-  return true;
 }

@@ -2,7 +2,8 @@ import { ActivityType, Client, Events, GatewayIntentBits, REST, Routes, type Mes
 import { chat, shouldReply } from "./ai";
 import { setToolContext } from "./tools";
 import { botLogger } from "./logger";
-import { handleCommands, slashCommands, handleSlashCommand } from "./commands";
+import { handleCommands } from "./commands";
+import { slashCommands, handleSlashCommand } from "./slashCommands";
 import { createStatusState, buildStatusEmbed, createChatCallbacks } from "./utils/status";
 import {
   fetchReplyChain,
