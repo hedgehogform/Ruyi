@@ -36,6 +36,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # IDE
 .vscode
 
-# Bot data files
+# Bot data files (legacy - now using MongoDB)
 memory.json
 memory_store.json
+config.json

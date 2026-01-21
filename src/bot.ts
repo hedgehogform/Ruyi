@@ -1,24 +1,28 @@
-import {
-  ActivityType,
-  Client,
-  EmbedBuilder,
-  Events,
-  GatewayIntentBits,
-  type Message,
-} from "discord.js";
-import { chat, shouldReply, type ChatMessage, type ChatCallbacks } from "./ai";
+import { ActivityType, Client, Events, GatewayIntentBits, REST, Routes, type Message } from "discord.js";
+import { chat, shouldReply } from "./ai";
 import { setToolContext } from "./tools";
 import { botLogger } from "./logger";
+import { handleCommands, slashCommands, handleSlashCommand } from "./commands";
+import { createStatusState, buildStatusEmbed, createChatCallbacks } from "./utils/status";
+import {
+  fetchReplyChain,
+  fetchChatHistory,
+  fetchReferencedMessage,
+  sendReplyChunks,
+  getErrorMessage,
+} from "./utils/messages";
+import { startMessageSync, deleteMessageFromDb } from "./services/messageSync";
 
-// Client setup
 export const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers, // REQUIRED
+    GatewayIntentBits.GuildMembers,
   ],
 });
+
+const SELF_RESPONDING_TOOLS = new Set(["send_embed", "generate_image"]);
 
 function setDefaultPresence() {
   client.user?.setPresence({
@@ -26,7 +30,6 @@ function setDefaultPresence() {
   });
 }
 
-// Status helpers
 function setTypingStatus(username: string) {
   client.user?.setActivity(`Assisting ${username}...`, {
     type: ActivityType.Custom,
@@ -34,236 +37,6 @@ function setTypingStatus(username: string) {
   });
 }
 
-function clearStatus() {
-  setDefaultPresence();
-}
-
-// Status embed builder
-interface StatusState {
-  status: "thinking" | "tool" | "complete" | "error";
-  currentTool?: string;
-  toolsUsed: string[];
-  startTime: number;
-}
-
-function getStatusColor(status: StatusState["status"]): number {
-  if (status === "complete") return 0x00ff00;
-  if (status === "error") return 0xff0000;
-  return 0xffaa00;
-}
-
-// Format elapsed time as human-readable string (1s, 1m 30s, 1h 5m, etc.)
-function formatElapsedTime(seconds: number): string {
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-
-  return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
-}
-
-function buildStatusEmbed(state: StatusState): EmbedBuilder {
-  const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
-
-  // Build status text
-  let statusText: string;
-  switch (state.status) {
-    case "thinking":
-      statusText = "Thinking...";
-      break;
-    case "tool":
-      statusText = `Running: \`${state.currentTool}\``;
-      break;
-    case "complete":
-      statusText = "Complete";
-      break;
-    case "error":
-      statusText = "Error";
-      break;
-  }
-
-  // Build description with optional tools list
-  let description = `**${statusText}** • ${formatElapsedTime(elapsed)}`;
-  if (state.toolsUsed.length > 0) {
-    const toolList = state.toolsUsed.map((t) => `\`${t}\``).join(" ");
-    description += `\n${toolList}`;
-  }
-
-  return new EmbedBuilder()
-    .setColor(getStatusColor(state.status))
-    .setDescription(description);
-}
-
-// Message handlers
-async function handlePing(message: Message): Promise<boolean> {
-  if (message.content === "!ping") {
-    botLogger.debug({ user: message.author.displayName }, "Ping command");
-    await message.reply("Pong!");
-    return true;
-  }
-  return false;
-}
-
-// Check if bot should respond to a non-mention/non-DM message
-async function checkShouldRespond(
-  content: string,
-  user: string,
-  channelName: string | null
-): Promise<boolean> {
-  botLogger.debug({ user, channel: channelName }, "Checking if should reply");
-  const shouldRespond = await shouldReply(
-    content,
-    client.user?.displayName ?? "Bot"
-  );
-  if (!shouldRespond) {
-    botLogger.debug({ user, channel: channelName }, "Decided not to reply");
-    return false;
-  }
-  botLogger.info({ user, channel: channelName }, "Decided to reply to message");
-  return true;
-}
-
-// Fetch the reply chain for a message (follows reply references recursively)
-async function fetchReplyChain(message: Message, maxDepth = 10): Promise<ChatMessage[]> {
-  const chain: ChatMessage[] = [];
-  let currentRef: { channelId: string; messageId: string } | null =
-    message.reference?.messageId
-      ? { channelId: message.channel.id, messageId: message.reference.messageId }
-      : null;
-  let depth = 0;
-
-  if (!("messages" in message.channel)) return chain;
-
-  while (currentRef && depth < maxDepth) {
-    try {
-      const referencedMessage = await message.channel.messages.fetch(currentRef.messageId);
-      chain.unshift({
-        author: referencedMessage.author.displayName,
-        content: referencedMessage.content.replaceAll(/<@!?\d+>/g, "").trim(),
-        isBot: referencedMessage.author.bot,
-        isReplyContext: true,
-      });
-      currentRef = referencedMessage.reference?.messageId
-        ? { channelId: referencedMessage.channel.id, messageId: referencedMessage.reference.messageId }
-        : null;
-      depth++;
-    } catch {
-      // Message was deleted or inaccessible
-      break;
-    }
-  }
-
-  return chain;
-}
-
-// Fetch recent chat history from channel
-async function fetchChatHistory(message: Message): Promise<ChatMessage[]> {
-  const chatHistory: ChatMessage[] = [];
-  if (!("messages" in message.channel)) return chatHistory;
-
-  const messages = await message.channel.messages.fetch({ limit: 15 });
-  const sorted = [...messages.values()].reverse();
-  for (const msg of sorted) {
-    if (msg.id === message.id) continue;
-    chatHistory.push({
-      author: msg.author.displayName,
-      content: msg.content.replaceAll(/<@!?\d+>/g, "").trim(),
-      isBot: msg.author.bot,
-    });
-  }
-  return chatHistory;
-}
-
-// Create chat callbacks for status updates
-function createChatCallbacks(
-  state: StatusState,
-  updateEmbed: () => Promise<void>
-): ChatCallbacks {
-  return {
-    onThinking: () => {
-      state.status = "thinking";
-      state.currentTool = undefined;
-    },
-    onToolStart: (toolName) => {
-      state.status = "tool";
-      state.currentTool = toolName;
-      updateEmbed();
-    },
-    onToolEnd: (toolName) => {
-      if (!state.toolsUsed.includes(toolName)) {
-        state.toolsUsed.push(toolName);
-      }
-    },
-    onComplete: () => {
-      state.status = "complete";
-      state.currentTool = undefined;
-    },
-  };
-}
-
-// Tools that send their own messages (no text reply needed)
-const SELF_RESPONDING_TOOLS = new Set(["send_embed"]);
-
-// Split message into chunks that fit Discord's 2000 character limit
-function splitMessage(text: string, maxLength = 2000): string[] {
-  if (text.length <= maxLength) return [text];
-
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLength) {
-      chunks.push(remaining);
-      break;
-    }
-
-    // Try to split at a natural break point
-    let splitIndex = maxLength;
-
-    // Look for newline within the last 200 chars of the chunk
-    const newlineIndex = remaining.lastIndexOf("\n", maxLength);
-    if (newlineIndex > maxLength - 200) {
-      splitIndex = newlineIndex + 1;
-    } else {
-      // Look for space within the last 100 chars
-      const spaceIndex = remaining.lastIndexOf(" ", maxLength);
-      if (spaceIndex > maxLength - 100) {
-        splitIndex = spaceIndex + 1;
-      }
-    }
-
-    chunks.push(remaining.slice(0, splitIndex).trimEnd());
-    remaining = remaining.slice(splitIndex).trimStart();
-  }
-
-  return chunks;
-}
-
-// Get error message for OpenRouter API errors
-function getErrorMessage(error: any): string {
-  const status = error?.status || error?.code;
-  const errorMsg = error?.error?.message || error?.message;
-
-  if (status === 402) {
-    return "Apologies, but I've run out of credits to process requests. Please try again later.";
-  }
-  if (status === 429) {
-    return "I'm receiving too many requests right now. Please wait a moment.";
-  }
-  if (status === 503 || status === 502) {
-    return "The AI service is temporarily unavailable. Please try again shortly.";
-  }
-  return `Something went wrong: ${errorMsg || "Unknown error"}`;
-}
-
-// Check if bot should respond and log appropriately
 async function shouldBotRespond(
   content: string,
   user: string,
@@ -272,64 +45,87 @@ async function shouldBotRespond(
   isDM: boolean
 ): Promise<boolean> {
   if (isMentioned || isDM) {
-    botLogger.info(
-      { user, channel: channelName, mentioned: isMentioned, dm: isDM },
-      "Replying to mention/DM"
-    );
+    botLogger.info({ user, channel: channelName, mentioned: isMentioned, dm: isDM }, "Replying to mention/DM");
     return true;
   }
 
   try {
-    return await checkShouldRespond(content, user, channelName);
+    botLogger.debug({ user, channel: channelName }, "Checking if should reply");
+    const shouldRespond = await shouldReply(content, client.user?.displayName ?? "Bot");
+    if (shouldRespond) {
+      botLogger.info({ user, channel: channelName }, "Decided to reply to message");
+    }
+    return shouldRespond;
   } catch {
     return false;
   }
 }
 
-// Fetch the referenced message if this is a reply
-async function fetchReferencedMessage(message: Message): Promise<Message | null> {
-  if (!message.reference?.messageId || !("messages" in message.channel)) {
-    return null;
-  }
-  try {
-    return await message.channel.messages.fetch(message.reference.messageId);
-  } catch {
-    return null; // Referenced message was deleted
-  }
-}
+// Extract image URLs from Discord message attachments and embeds
+function extractImageUrls(message: Message): string[] {
+  const imageUrls: string[] = [];
 
-// Send reply in chunks if needed
-async function sendReplyChunks(message: Message, reply: string, user: string): Promise<void> {
-  const chunks = splitMessage(reply);
-  for (const [i, chunk] of chunks.entries()) {
-    if (i === 0) {
-      await message.reply(chunk);
-    } else if ("send" in message.channel) {
-      await message.channel.send(chunk);
+  // Get images from attachments
+  for (const attachment of message.attachments.values()) {
+    if (attachment.contentType?.startsWith("image/")) {
+      imageUrls.push(attachment.url);
     }
   }
-  botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
+
+  // Get images from embeds (e.g., when someone pastes an image URL)
+  for (const embed of message.embeds) {
+    if (embed.image?.url) {
+      imageUrls.push(embed.image.url);
+    }
+    if (embed.thumbnail?.url) {
+      imageUrls.push(embed.thumbnail.url);
+    }
+  }
+
+  return imageUrls;
 }
 
 async function handleAIChat(message: Message): Promise<void> {
   const isMentioned = message.mentions.has(client.user!);
   const isDM = message.channel.isDMBased();
   const content = message.content.replaceAll(/<@!?\d+>/g, "").trim();
+  const imageUrls = extractImageUrls(message);
 
-  if (!content) return;
+  // Allow messages with only images (no text) if they have attachments
+  if (!content && imageUrls.length === 0) return;
 
   const user = message.author.displayName;
   const channelName = "name" in message.channel ? message.channel.name : "DM";
 
-  const shouldRespond = await shouldBotRespond(content, user, channelName, isMentioned, isDM);
-  if (!shouldRespond) return;
+  // If user sends images with mention/DM, always respond; otherwise check normally
+  const hasImages = imageUrls.length > 0;
+  if (!hasImages && !(await shouldBotRespond(content, user, channelName, isMentioned, isDM))) return;
+  if (hasImages && !isMentioned && !isDM && !(await shouldBotRespond(content || "User sent an image", user, channelName, isMentioned, isDM))) return;
 
-  if ("sendTyping" in message.channel) {
-    await message.channel.sendTyping();
-  }
+  // Typing indicator control - only show when AI is generating text, not during tool calls
+  let typingInterval: ReturnType<typeof setInterval> | null = null;
+  const typingControl = {
+    start: () => {
+      if (typingInterval) return; // Already running
+      if ("sendTyping" in message.channel) {
+        message.channel.sendTyping().catch(() => {});
+        typingInterval = setInterval(() => {
+          if ("sendTyping" in message.channel) {
+            message.channel.sendTyping().catch(() => {});
+          }
+        }, 8000);
+      }
+    },
+    stop: () => {
+      if (typingInterval) {
+        clearInterval(typingInterval);
+        typingInterval = null;
+      }
+    },
+  };
+  typingControl.start();
   setTypingStatus(user);
 
-  // Fetch context in parallel
   const [replyChain, chatHistory, referencedMessage] = await Promise.all([
     fetchReplyChain(message),
     fetchChatHistory(message),
@@ -337,23 +133,18 @@ async function handleAIChat(message: Message): Promise<void> {
   ]);
 
   const combinedHistory = [...replyChain, ...chatHistory];
-  botLogger.debug(
-    { replyChainLength: replyChain.length, historyCount: chatHistory.length },
-    "Fetched message context"
-  );
+  botLogger.debug({ replyChainLength: replyChain.length, historyCount: chatHistory.length, imageCount: imageUrls.length }, "Fetched message context");
 
-  // Set tool context so tools can access Discord data
   const channel = "name" in message.channel ? message.channel : null;
   setToolContext(message, channel as any, message.guild, referencedMessage);
 
-  // Create status state and embed
-  const state: StatusState = { status: "thinking", toolsUsed: [], startTime: Date.now() };
+  const state = createStatusState();
   const statusMessage = await message.reply({ embeds: [buildStatusEmbed(state)] });
 
   const updateEmbed = async () => {
     try {
       await statusMessage.edit({ embeds: [buildStatusEmbed(state)] });
-    } catch { /* Message may have been deleted */ }
+    } catch {}
   };
 
   const updateInterval = setInterval(() => {
@@ -364,53 +155,73 @@ async function handleAIChat(message: Message): Promise<void> {
     clearInterval(updateInterval);
     try {
       await statusMessage.delete();
-    } catch { /* Message may have been deleted already */ }
+    } catch {}
   };
 
-  const callbacks = createChatCallbacks(state, updateEmbed);
+  const callbacks = createChatCallbacks(state, updateEmbed, typingControl);
 
   try {
-    const reply = await chat(content, user, message.channel.id, combinedHistory, callbacks);
+    const reply = await chat(content || "What is in this image?", user, message.channel.id, combinedHistory, callbacks, imageUrls, message.id);
     await deleteStatusEmbed();
 
     if (reply) {
       await sendReplyChunks(message, reply, user);
     } else {
-      // Check if a self-responding tool was used (like send_embed)
-      const usedSelfRespondingTool = state.toolsUsed.some((t) => SELF_RESPONDING_TOOLS.has(t));
+      const usedSelfRespondingTool = [...state.toolCounts.keys()].some((t) => SELF_RESPONDING_TOOLS.has(t));
       if (!usedSelfRespondingTool) {
         await message.reply("I was unable to generate a response.");
       }
     }
-  } catch (error: any) {
+  } catch (error) {
     botLogger.error({ error, user }, "Failed to generate reply");
     await deleteStatusEmbed();
     await message.reply(getErrorMessage(error));
   } finally {
     clearInterval(updateInterval);
-    clearStatus();
+    typingControl.stop();
+    setDefaultPresence();
   }
 }
 
-// Register events
-export function registerEvents() {
-  client.once(Events.ClientReady, (readyClient) => {
-    botLogger.info({ tag: readyClient.user.tag }, "Bot logged in");
+async function registerSlashCommands() {
+  const token = Bun.env.DISCORD_TOKEN!;
+  const rest = new REST().setToken(token);
 
-    // Set initial presence
+  try {
+    const commands = slashCommands.map((cmd) => cmd.toJSON());
+    await rest.put(Routes.applicationCommands(client.user!.id), { body: commands });
+    botLogger.info({ count: commands.length }, "Registered slash commands");
+  } catch (error) {
+    botLogger.error({ error }, "Failed to register slash commands");
+  }
+}
+
+export function registerEvents() {
+  client.once(Events.ClientReady, async (readyClient) => {
+    botLogger.info({ tag: readyClient.user.tag }, "Bot logged in");
     setDefaultPresence();
+    await registerSlashCommands();
+    startMessageSync(client);
+  });
+
+  client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+    await handleSlashCommand(interaction);
   });
 
   client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
-
-    if (await handlePing(message)) return;
-
+    if (await handleCommands(message)) return;
     await handleAIChat(message);
+  });
+
+  client.on(Events.MessageDelete, async (message) => {
+    if (message.id && message.channelId) {
+      await deleteMessageFromDb(message.channelId, message.id);
+    }
   });
 }
 
-// Start bot
 export function startBot() {
   const token = Bun.env.DISCORD_TOKEN;
   if (!token) {

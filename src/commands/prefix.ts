@@ -1,0 +1,34 @@
+import {
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  type ChatInputCommandInteraction,
+} from "discord.js";
+import { getPrefix, setPrefix } from "../config";
+import { botLogger } from "../logger";
+
+export const prefixCommand = new SlashCommandBuilder()
+  .setName("prefix")
+  .setDescription("View or change the bot command prefix")
+  .addStringOption((option) =>
+    option
+      .setName("new_prefix")
+      .setDescription("The new prefix to use (leave empty to view current)")
+      .setRequired(false)
+      .setMaxLength(5)
+  )
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+
+export async function handlePrefixCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const newPrefix = interaction.options.getString("new_prefix");
+
+  if (!newPrefix) {
+    await interaction.reply(`Current prefix: \`${getPrefix()}\``);
+    return;
+  }
+
+  const oldPrefix = getPrefix();
+  setPrefix(newPrefix);
+
+  botLogger.info({ oldPrefix, newPrefix, user: interaction.user.displayName }, "Prefix changed");
+  await interaction.reply(`Prefix changed from \`${oldPrefix}\` to \`${newPrefix}\``);
+}

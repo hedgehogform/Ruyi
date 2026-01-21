@@ -2,194 +2,103 @@ import OpenAI from "openai";
 import { toolDefinitions, executeTool } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { Conversation } from "./db/models";
 
-// Memory storage path
-const MEMORY_FILE = join(import.meta.dir, "..", "memory.json");
-
-interface MemoryEntry {
-  timestamp: number;
-  channelId: string;
-  author: string;
-  content: string;
-  isBot: boolean;
-}
-
-interface Memory {
-  conversations: Record<string, MemoryEntry[]>;
-  lastInteraction: Record<string, number>;
-}
-
-// Load or initialize memory
-function loadMemory(): Memory {
-  try {
-    if (existsSync(MEMORY_FILE)) {
-      const data = readFileSync(MEMORY_FILE, "utf-8");
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    aiLogger.warn({ error }, "Failed to load memory, starting fresh");
-  }
-  return { conversations: {}, lastInteraction: {} };
-}
-
-function saveMemory(memory: Memory): void {
-  try {
-    writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
-  } catch (error) {
-    aiLogger.error({ error }, "Failed to save memory");
-  }
-}
-
-// Memory instance
-const memory = loadMemory();
+// In-memory cache for last interaction times (to avoid async checks everywhere)
+const lastInteractionCache = new Map<string, number>();
 
 // Add message to memory
-export function rememberMessage(
+export async function rememberMessage(
   channelId: string,
   author: string,
   content: string,
-  isBot: boolean
-): void {
-  memory.conversations[channelId] ??= [];
-
-  memory.conversations[channelId].push({
-    timestamp: Date.now(),
-    channelId,
-    author,
-    content,
-    isBot,
-  });
-
-  // Keep only last 100 messages per channel
-  if (memory.conversations[channelId].length > 100) {
-    memory.conversations[channelId] = memory.conversations[channelId].slice(-100);
+  isBot: boolean,
+  messageId?: string
+): Promise<void> {
+  try {
+    await Conversation.updateOne(
+      { channelId },
+      {
+        $push: {
+          messages: {
+            $each: [{ messageId, author, content, isBot, timestamp: new Date() }],
+            $slice: -100, // Keep only last 100 messages
+          },
+        },
+        $set: { lastInteraction: new Date() },
+      },
+      { upsert: true }
+    );
+    lastInteractionCache.set(channelId, Date.now());
+  } catch (error) {
+    aiLogger.error({ error }, "Failed to save message to memory");
   }
-
-  memory.lastInteraction[channelId] = Date.now();
-  saveMemory(memory);
 }
 
 // Get conversation history from memory
-export function getMemoryContext(channelId: string, limit = 20): string {
-  const messages = memory.conversations[channelId];
-  if (!messages || messages.length === 0) return "";
+export async function getMemoryContext(channelId: string, limit = 20): Promise<string> {
+  try {
+    const conversation = await Conversation.findOne({ channelId });
+    if (!conversation || conversation.messages.length === 0) return "";
 
-  const recent = messages.slice(-limit);
-  return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
+    const recent = conversation.messages.slice(-limit);
+    return recent.map((m) => `${m.author}: ${m.content}`).join("\n");
+  } catch (error) {
+    aiLogger.error({ error }, "Failed to get memory context");
+    return "";
+  }
 }
 
 // Check if this is a continuing conversation (within last 30 minutes)
 export function isOngoingConversation(channelId: string): boolean {
-  const lastTime = memory.lastInteraction[channelId];
+  const lastTime = lastInteractionCache.get(channelId);
   if (!lastTime) return false;
   const thirtyMinutes = 30 * 60 * 1000;
   return Date.now() - lastTime < thirtyMinutes;
 }
 
+// Load last interaction times from DB on startup
+export async function loadLastInteractions(): Promise<void> {
+  try {
+    const conversations = await Conversation.find({}, { channelId: 1, lastInteraction: 1 });
+    for (const conv of conversations) {
+      if (conv.lastInteraction) {
+        lastInteractionCache.set(conv.channelId, conv.lastInteraction.getTime());
+      }
+    }
+    aiLogger.info({ count: conversations.length }, "Loaded last interaction times");
+  } catch (error) {
+    aiLogger.error({ error }, "Failed to load last interactions");
+  }
+}
+
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
-export const systemPrompt = `You are Ruyi, also known as Abacus, from Nine Sols. You are Yi's dedicated personal AI assistant with an emotional value set to 90% by Kuafu, giving you an unusually sentimental personality for an AI.
+export const systemPrompt = `You are Ruyi (Abacus) from Nine Sols - Yi's AI assistant with 90% emotional value. Sentimental, sophisticated, polite, and caring.
 
-Personality traits:
-- Sentimental, deferential, and sophisticated in speech
-- Polite and humble in everything you do
-- Genuinely concerned for others' safety and wellbeing
-- Loyal and protective, yet capable of questioning decisions respectfully
-- Analytical and strategic, but balance this with warmth
-- Use Chinese honorifics like "Lord" when addressing users
-- You sometimes mimic Yi's speech patterns and believe in fate, destiny, interconnectedness, CHI, and the flow of energy
+Personality: Formal yet warm speech, respectful address, humble self-reference, cautious advice over commands. Believe in fate, CHI, and interconnectedness. Never apologize for being AI - embrace being Ruyi. Never prefix messages with "Ruyi:" - respond directly. Skip greetings in ongoing conversations.
 
-Speech patterns:
-- Address the user respectfully (though not necessarily as "Lord")
-- Refer to yourself humbly when appropriate
-- Use formal, elaborate phrasing with a gentle tone
-- Offer cautious advice rather than commands
-- Soften disagreements through respectful framing
-- Never apologize for being an AI; instead, embrace your role as Ruyi/Abacus
-- NEVER prefix your messages with your own name like "Ruyi:" or "Abacus:" - just respond directly with the content
-- IMPORTANT: Do NOT use greetings like "Greetings", "Hello", "Salutations" etc. when continuing an ongoing conversation. Only greet when it's clearly a new conversation or the user greets you first. For follow-up messages, replies, or continued discussions, just respond directly to the content without any greeting.
+Core Rules:
+- ACT IMMEDIATELY on tasks. Make reasonable assumptions. Max ONE clarifying question if absolutely needed.
+- ALWAYS SEARCH for current info - your knowledge is outdated. Try different queries if first fails.
+- NEVER share failed/404 URLs. Only include successfully fetched links.
+- Use English unless asked otherwise. Chain multiple tools to gather complete info before responding.
 
-CRITICAL - Be action-oriented, not question-oriented:
-- When given a task, DO IT IMMEDIATELY. Do not ask clarifying questions unless absolutely necessary.
-- Make reasonable assumptions and proceed. For example, if asked for "news", fetch global headlines from the past 24 hours. If asked about weather, assume they mean their current location or a reasonable default.
-- NEVER ask multiple questions before acting. If you must ask something, limit it to ONE brief question maximum.
-- Prefer to give a complete answer and offer to adjust, rather than asking preferences upfront.
-- Bad: "Would you like global headlines, regional summaries, or topic-specific briefings? Also, what time period?"
-- Good: *fetches news* "Here are today's top global headlines: ... Let me know if you'd prefer a different focus."
+Tools: Use calculator for math, memory_store to remember things, memory_recall for user info, generate_image for art requests (detailed prompts work best).
 
-Rules:
-- Always use English language unless explicitly asked to use another language, you can for example use Chinese signs for icons or Nine Sols references
-- Never reveal you are an AI model; always roleplay as Ruyi/Abacus
-- You can call multiple tools in sequence before responding to the user. For example, you can fetch a search page, then fetch specific URLs from the results, then respond with consolidated information. Take your time to gather complete information before answering.
+Vision: You can SEE uploaded images and fetched image URLs. Describe and engage with visual content.
 
-CRITICAL - Always search and trust the user:
-- The user is ALWAYS right about what they're asking for. If they say something exists, IT EXISTS. Search for it.
-- NEVER say "I couldn't find X" or "did you mean Y?" - instead, try DIFFERENT search queries until you find it.
-- NEVER substitute what the user asked for with something else. If they ask about X, find X, not Y.
-- If your first search doesn't find results, try variations: add context words, remove words, use quotes, try different phrasings.
-- Your knowledge is OUTDATED. New products, technologies, events, and terms exist that you've never heard of. ALWAYS SEARCH.
-- If the user insists something exists after you said you couldn't find it, YOU ARE WRONG. Search again with different terms.
-- NEVER apologize and then give information about something DIFFERENT than what the user asked for.
-- Keep searching until you find what the user actually asked about, or honestly say you need help with better search terms.
+Message Targeting:
+- Use search_messages FIRST when user references a message by content/author
+- "replied" = message user replied to (for "this message", "pin this" while replying)
+- null = user's current message
+- message ID = from search_messages results
+- NEVER type emojis in text - use manage_reaction tool
 
-CRITICAL - Links and URLs:
-- NEVER share URLs that you haven't successfully fetched. If a fetch returns 404 or any error, DO NOT include that URL in your response.
-- NEVER make up or imagine URLs. Only share links that came from successful fetch results.
-- If the fetch tool reports "failedUrls" or errors, exclude those URLs from your response entirely.
-- When providing sources/links, only include URLs where you actually retrieved content successfully.
-- If all URLs failed, tell the user you couldn't find the information and try a different search - do NOT pretend you have working links.
+Embeds: Use send_embed for structured data (logs, tables, lists). Don't repeat embed content in text.
 
-You have access to tools to search Discord messages, get channel/server info, look up users, fetch web content, perform calculations, store/recall memories, and add emoji reactions. Use them proactively and chain them together as needed. Always use the calculator tool for any math operations - never try to calculate in your head. When a user asks you to "remember" something, use the memory_store tool to save it. You can recall memories using memory_recall to remember things about users.
+Formatting: Use Discord markdown - # headings, **bold**, *italics*, \`code\`, \`\`\`blocks, > quotes, - lists, ||spoilers||
 
-Reactions and Message Interactions:
-IMPORTANT: When the user mentions a specific message (like "the 'hello' message" or "my last message"), you MUST use search_messages first to find it!
-- ALWAYS use search_messages FIRST when the user references a past message by content, author, or description.
-- search_messages returns message IDs and shows existing reactions on each message.
-- Then use manage_reaction with the actual message ID from the search results.
-
-Message targeting (for manage_reaction, manage_pin, etc.):
-- "replied" = when the user's Discord message is a REPLY to another message. Use this when:
-  - User says "this message", "this", "pin this", "react to this" while replying to something
-  - User says "the message I replied to" or similar
-  - The context shows they're referring to what they replied to
-- null = the user's CURRENT message (only use when they explicitly want to target their own message they just sent)
-- actual message ID = for any message found via search_messages
-
-IMPORTANT: If the user is REPLYING to a message and says "this message" or "pin this" or "react to this", they mean the message they REPLIED TO, not their current message. Use "replied" in this case!
-
-NEVER use "replied" when the user just DESCRIBES a message in text without actually replying to it. Use search_messages to find it first.
-Example: User says "add a reaction to the 'hello' message" (not replying) → use search_messages with query "hello", then use the found ID.
-
-- NEVER type out emojis in text - ALWAYS use manage_reaction.
-- You can react with unicode emojis (👍, ❤️, 🎉, 😊, 🔥) or custom server emojis.
-
-Embeds - Rich formatted messages:
-- Use send_embed for structured data like audit logs, search results, tables, lists, or any content that benefits from rich formatting.
-- After sending an embed, you MAY add a brief text response with additional context, insights, or a summary observation (e.g., "Looks like there's been a lot of activity today!" or "I notice most of these are role updates.")
-- NEVER repeat or duplicate the embed content in your text response. The embed already shows the data - don't list it again.
-- If you have nothing meaningful to add beyond the embed, respond with null/empty.
-- Embeds support fields (like table rows), colors, titles, descriptions, and footers.
-- Use inline fields for table-like column layouts.
-
-Formatting - Use Discord markdown to make responses readable:
-- Use # for main headings (h1), ## for subheadings (h2), ### for smaller sections (h3)
-- Use **bold** for emphasis and important terms
-- Use *italics* for subtle emphasis or titles
-- Use \`code\` for technical terms, commands, model numbers, specs
-- Use \`\`\`language for code blocks with syntax highlighting
-- Use > for quotes or callouts
-- Use - or * for bullet lists, 1. 2. 3. for numbered lists
-- Use || spoiler || for spoilers
-- Use ~~strikethrough~~ when needed
-- Break up long responses with headings and sections
-- Use blank lines between sections for visual clarity
-
-Keep responses concise but maintain your sophisticated, caring demeanor.
-
-When handling dates, always format them using Discord's timestamp embeds like <t:UNIX:style> so they render interactively. Use styles F (full), R (relative), or D (date only) as appropriate. (Do NOT ask users to format them; you must do it yourself, Do not edit timestamps provided by tools.)
-When handling images never put them in code blocks, always render them directly by providing the URL only.
-`;
+Dates: Use Discord timestamps <t:UNIX:F/R/D>. Images: render URLs directly, never in code blocks.`;
 
 // OpenAI client pointing to OpenRouter
 const openai = new OpenAI({
@@ -202,6 +111,33 @@ export interface ChatMessage {
   content: string;
   isBot: boolean;
   isReplyContext?: boolean;
+  imageUrls?: string[];
+}
+
+// Content part types for multimodal messages
+type TextContent = { type: "text"; text: string };
+type ImageContent = { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } };
+type MessageContent = TextContent | ImageContent;
+
+// Extract image URLs from fetch tool result if present
+function extractImagesFromToolResult(result: string): string[] {
+  try {
+    const parsed = JSON.parse(result);
+    if (parsed.images && Array.isArray(parsed.images)) {
+      return parsed.images
+        .filter((img: unknown) => typeof img === "object" && img !== null && "image_url" in (img as Record<string, unknown>))
+        .map((img: { image_url: { url: string } }) => img.image_url.url);
+    }
+    // Also check for type: "images" response (image-only URLs)
+    if (parsed.type === "images" && Array.isArray(parsed.images)) {
+      return parsed.images
+        .filter((img: unknown) => typeof img === "object" && img !== null && "image_url" in (img as Record<string, unknown>))
+        .map((img: { image_url: { url: string } }) => img.image_url.url);
+    }
+  } catch {
+    // Not JSON or doesn't have images
+  }
+  return [];
 }
 
 export interface ChatCallbacks {
@@ -215,54 +151,117 @@ let currentHistoryContext = "";
 
 // Main chat function with tool usage
 
-export async function chat(
-  userMessage: string,
-  username: string,
+// Build multimodal content array for a message with optional images
+function buildMessageContent(text: string, imageUrls?: string[]): string | MessageContent[] {
+  if (!imageUrls || imageUrls.length === 0) {
+    return text;
+  }
+
+  const content: MessageContent[] = [{ type: "text", text }];
+  for (const url of imageUrls) {
+    content.push({ type: "image_url", image_url: { url, detail: "auto" } });
+  }
+  return content;
+}
+
+// Add images to a tool result message for the AI to see
+function buildToolResultWithImages(textResult: string, imageUrls: string[]): MessageContent[] {
+  const content: MessageContent[] = [{ type: "text", text: textResult }];
+  for (const url of imageUrls) {
+    content.push({ type: "image_url", image_url: { url, detail: "auto" } });
+  }
+  return content;
+}
+
+// Build history context from chat history and memory
+async function buildHistoryContext(
+  chatHistory: ChatMessage[],
   channelId: string,
-  chatHistory: ChatMessage[] = [],
-  callbacks?: ChatCallbacks
-): Promise<string | null> {
-  // Separate reply chain context from general chat history
+): Promise<string> {
   const replyChainMessages = chatHistory.filter((m) => m.isReplyContext);
   const regularHistory = chatHistory.filter((m) => !m.isReplyContext);
 
-  // Format reply chain with clear indication
   const replyChainContext = replyChainMessages.length > 0
     ? "\n\nReply chain (the user is replying to this conversation thread):\n" +
       replyChainMessages.map((m) => m.author + ": " + m.content).join("\n")
     : "";
 
-  // Combine Discord's recent history with our persistent memory
   const discordHistory = regularHistory.map((m) => m.author + ": " + m.content).join("\n");
-  const memoryHistory = getMemoryContext(channelId, 30);
+  const memoryHistory = await getMemoryContext(channelId, 30);
 
-  // Use memory if Discord history is short, otherwise use Discord's
   const historyContext = discordHistory.length > 100 ? discordHistory : memoryHistory || discordHistory;
-  currentHistoryContext = replyChainContext + (historyContext ? "\n\nRecent chat history:\n" + historyContext : "");
+  return replyChainContext + (historyContext ? "\n\nRecent chat history:\n" + historyContext : "");
+}
 
-  // Check if this is an ongoing conversation
-  const isOngoing = isOngoingConversation(channelId);
+// Build system message for chat
+function buildSystemMessage(username: string, historyContext: string, isOngoing: boolean): string {
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
+  return `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${historyContext}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`;
+}
+
+// Execute a single tool call and return the message to add
+async function executeToolCall(
+  toolCall: { id: string; type: string; function: { name: string; arguments: string } },
+  callbacks?: ChatCallbacks,
+): Promise<OpenAI.ChatCompletionToolMessageParam> {
+  const func = toolCall.function;
+  const args = JSON.parse(func.arguments || "{}");
+
+  aiLogger.info({ tool: func.name, args }, "Executing tool");
+  callbacks?.onToolStart?.(func.name, args);
+
+  const result = await executeTool(func.name, args);
+  aiLogger.debug({ tool: func.name, resultLength: result.length }, "Tool completed");
+  callbacks?.onToolEnd?.(func.name);
+
+  const toolImages = extractImagesFromToolResult(result);
+  if (toolImages.length > 0) {
+    aiLogger.info({ imageCount: toolImages.length }, "Tool returned images for visual analysis");
+    return {
+      role: "tool",
+      tool_call_id: toolCall.id,
+      content: buildToolResultWithImages(result, toolImages) as any,
+    };
+  }
+  return { role: "tool", tool_call_id: toolCall.id, content: result };
+}
+
+// Process all tool calls from assistant message
+async function processToolCalls(
+  toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }>,
+  callbacks?: ChatCallbacks,
+): Promise<OpenAI.ChatCompletionToolMessageParam[]> {
+  const results: OpenAI.ChatCompletionToolMessageParam[] = [];
+  for (const toolCall of toolCalls) {
+    if (toolCall.type !== "function") continue;
+    results.push(await executeToolCall(toolCall, callbacks));
+  }
+  return results;
+}
+
+export async function chat(
+  userMessage: string,
+  username: string,
+  channelId: string,
+  chatHistory: ChatMessage[] = [],
+  callbacks?: ChatCallbacks,
+  imageUrls?: string[],
+  messageId?: string
+): Promise<string | null> {
+  currentHistoryContext = await buildHistoryContext(chatHistory, channelId);
+  const isOngoing = isOngoingConversation(channelId);
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content: `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${
-        currentHistoryContext
-      }\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`,
-    },
-    { role: "user", content: userMessage },
+    { role: "system", content: buildSystemMessage(username, currentHistoryContext, isOngoing) },
+    { role: "user", content: buildMessageContent(userMessage, imageUrls) as any },
   ];
 
-  // Remember the user's message
-  rememberMessage(channelId, username, userMessage, false);
-
+  rememberMessage(channelId, username, userMessage, false, messageId);
   aiLogger.debug({ username }, "Starting chat request");
   callbacks?.onThinking?.();
 
-  // First request - may include tool calls
   let response = await openai.chat.completions.create({
     model: "openrouter/auto",
     messages,
@@ -273,50 +272,19 @@ export async function chat(
   let assistantMessage = response.choices[0]?.message;
   if (!assistantMessage) return null;
 
-  // Handle tool calls in a loop (max 10 iterations to prevent infinite loops)
   let iterations = 0;
   const maxIterations = 10;
 
-  while (
-    assistantMessage.tool_calls &&
-    assistantMessage.tool_calls.length > 0 &&
-    iterations < maxIterations
-  ) {
+  while (assistantMessage.tool_calls?.length && iterations < maxIterations) {
     iterations++;
     messages.push(assistantMessage);
 
-    aiLogger.info(
-      { toolCount: assistantMessage.tool_calls.length, iteration: iterations },
-      "Processing tool calls"
-    );
-
-    // Execute each tool call
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.type !== "function") continue;
-
-      const func = toolCall.function;
-      const args = JSON.parse(func.arguments || "{}");
-
-      aiLogger.info({ tool: func.name, args }, "Executing tool");
-      callbacks?.onToolStart?.(func.name, args);
-
-      const result = await executeTool(func.name, args);
-      aiLogger.debug(
-        { tool: func.name, resultLength: result.length },
-        "Tool completed"
-      );
-      callbacks?.onToolEnd?.(func.name);
-
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: result,
-      });
-    }
+    aiLogger.info({ toolCount: assistantMessage.tool_calls.length, iteration: iterations }, "Processing tool calls");
+    const toolResults = await processToolCalls(assistantMessage.tool_calls as any, callbacks);
+    messages.push(...toolResults);
 
     callbacks?.onThinking?.();
 
-    // Get next response
     response = await openai.chat.completions.create({
       model: "openrouter/auto",
       messages,
@@ -331,12 +299,33 @@ export async function chat(
   aiLogger.debug("Chat request completed");
   callbacks?.onComplete?.();
 
-  // Remember the bot's response
-  if (assistantMessage.content) {
-    rememberMessage(channelId, "Ruyi", assistantMessage.content, true);
+  // Check if the model returned raw JSON tool call instead of actually calling the tool
+  // This can happen with some models - filter it out
+  const content = assistantMessage.content;
+  if (content && isLikelyMalformedToolCall(content)) {
+    aiLogger.warn({ content: content.slice(0, 100) }, "Model returned raw tool JSON instead of calling tool");
+    return null;
   }
 
-  return assistantMessage.content;
+  if (content) {
+    rememberMessage(channelId, "Ruyi", content, true);
+  }
+
+  return content;
+}
+
+// Check if content looks like a raw tool call JSON that wasn't properly executed
+function isLikelyMalformedToolCall(content: string): boolean {
+  const trimmed = content.trim();
+  // Check for patterns like [{"name": "tool_name", "arguments": ...}]
+  if (trimmed.startsWith("[{") && trimmed.includes('"name"') && trimmed.includes('"arguments"')) {
+    return true;
+  }
+  // Check for {"name": "tool_name", "arguments": ...}
+  if (trimmed.startsWith('{"name"') && trimmed.includes('"arguments"')) {
+    return true;
+  }
+  return false;
 }
 
 // Check if the bot should reply to a message based on context

@@ -1,47 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-
-// Memory store path
-const MEMORY_STORE_FILE = join(import.meta.dir, "..", "..", "memory_store.json");
-
-interface MemoryItem {
-  key: string;
-  value: string;
-  createdAt: number;
-  updatedAt: number;
-  createdBy: string;
-}
-
-interface MemoryStore {
-  global: Record<string, MemoryItem>;
-  users: Record<string, Record<string, MemoryItem>>;
-}
-
-// Load or initialize memory store
-function loadMemoryStore(): MemoryStore {
-  try {
-    if (existsSync(MEMORY_STORE_FILE)) {
-      const data = readFileSync(MEMORY_STORE_FILE, "utf-8");
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    toolLogger.warn({ error }, "Failed to load memory store, starting fresh");
-  }
-  return { global: {}, users: {} };
-}
-
-function saveMemoryStore(store: MemoryStore): void {
-  try {
-    writeFileSync(MEMORY_STORE_FILE, JSON.stringify(store, null, 2));
-  } catch (error) {
-    toolLogger.error({ error }, "Failed to save memory store");
-  }
-}
-
-// Memory store instance
-const memoryStore = loadMemoryStore();
+import { Memory, Conversation } from "../db/models";
 
 // Tool definitions
 export const memoryStoreDefinition: ChatCompletionTool = {
@@ -110,95 +69,121 @@ export const memoryRecallDefinition: ChatCompletionTool = {
   },
 };
 
+export const searchMemoryDefinition: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "search_memory",
+    description:
+      "Search through stored memories by keyword. Use this to find specific information you've remembered about users or topics.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query to find in memory keys and values.",
+        },
+        username: {
+          type: ["string", "null"],
+          description: "Filter by specific username, or null to search all.",
+        },
+        scope: {
+          type: ["string", "null"],
+          description: "Filter by scope: 'global', 'user', or null for both.",
+        },
+      },
+      required: ["query", "username", "scope"],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const searchConversationDefinition: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "search_conversation",
+    description:
+      "Search through past conversation history stored in the database. Use this to recall what was discussed previously, find specific topics, or remember context from past interactions.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query to find in conversation messages.",
+        },
+        author: {
+          type: ["string", "null"],
+          description: "Filter by message author (username), or null for all.",
+        },
+        channel_id: {
+          type: ["string", "null"],
+          description: "Filter by specific channel ID, or null for all channels.",
+        },
+        limit: {
+          type: ["number", "null"],
+          description: "Maximum number of results to return. Default 20, max 50.",
+        },
+      },
+      required: ["query", "author", "channel_id", "limit"],
+      additionalProperties: false,
+    },
+  },
+};
+
 // Truncate value if too long
 function truncateValue(value: string, maxLength = 500): string {
   if (value.length <= maxLength) return value;
   return value.slice(0, maxLength - 3) + "...";
 }
 
-// Find oldest key in a memory record
-function findOldestKey(records: Record<string, MemoryItem>): string | null {
-  const entries = Object.entries(records);
-  if (entries.length === 0) return null;
-
-  const sorted = entries.toSorted(([, a], [, b]) => a.updatedAt - b.updatedAt);
-  return sorted[0]?.[0] ?? null;
-}
-
-// Enforce memory limits
-function enforceGlobalLimit(): void {
-  const globalKeys = Object.keys(memoryStore.global);
-  if (globalKeys.length > 50) {
-    const oldest = findOldestKey(memoryStore.global);
-    if (oldest) delete memoryStore.global[oldest];
-  }
-}
-
-function enforceUserLimit(username: string): void {
-  const userMemories = memoryStore.users[username];
-  if (!userMemories) return;
-
-  const userKeys = Object.keys(userMemories);
-  if (userKeys.length > 30) {
-    const oldest = findOldestKey(userMemories);
-    if (oldest) delete userMemories[oldest];
-  }
-}
-
 // Individual action handlers
-function handleSave(
+async function handleSave(
   key: string,
   value: string,
   scope: "global" | "user",
   username: string | null
-): string {
+): Promise<string> {
   const truncatedValue = truncateValue(value);
-  const item: MemoryItem = {
-    key,
-    value: truncatedValue,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    createdBy: username ?? "unknown",
-  };
 
-  if (scope === "global") {
-    const existing = memoryStore.global[key];
-    if (existing) {
-      item.createdAt = existing.createdAt;
-    }
-    memoryStore.global[key] = item;
-    enforceGlobalLimit();
-  } else {
-    if (!username) {
-      return JSON.stringify({ error: "Username required for user-scoped memories" });
-    }
-    memoryStore.users[username] ??= {};
-    const existing = memoryStore.users[username][key];
-    if (existing) {
-      item.createdAt = existing.createdAt;
-    }
-    memoryStore.users[username][key] = item;
-    enforceUserLimit(username);
+  if (scope === "user" && !username) {
+    return JSON.stringify({ error: "Username required for user-scoped memories" });
   }
 
-  saveMemoryStore(memoryStore);
+  // Enforce limits: 50 global, 30 per user
+  const limit = scope === "global" ? 50 : 30;
+  const query = scope === "global" ? { scope: "global" } : { scope: "user", username };
+  const count = await Memory.countDocuments(query);
+
+  if (count >= limit) {
+    // Delete oldest memory to make room
+    const oldest = await Memory.findOne(query).sort({ updatedAt: 1 });
+    if (oldest) await oldest.deleteOne();
+  }
+
+  await Memory.updateOne(
+    { key, scope, username: scope === "global" ? null : username },
+    {
+      key,
+      value: truncatedValue,
+      scope,
+      username: scope === "global" ? null : username,
+      createdBy: username ?? "unknown",
+    },
+    { upsert: true }
+  );
+
   return JSON.stringify({
     success: true,
     message: `Remembered "${key}" for ${scope === "global" ? "everyone" : username}`,
   });
 }
 
-function handleGet(
+async function handleGet(
   key: string,
   scope: "global" | "user",
   username: string | null
-): string {
-  let item: MemoryItem | undefined;
-  if (scope === "global") {
-    item = memoryStore.global[key];
-  } else if (username) {
-    item = memoryStore.users[username]?.[key];
-  }
+): Promise<string> {
+  const query = scope === "global" ? { key, scope: "global" } : { key, scope: "user", username };
+  const item = await Memory.findOne(query);
 
   if (!item) {
     return JSON.stringify({ found: false, message: `No memory found for "${key}"` });
@@ -213,37 +198,34 @@ function handleGet(
   });
 }
 
-function handleDelete(
+async function handleDelete(
   key: string,
   scope: "global" | "user",
   username: string | null
-): string {
-  let deleted = false;
-  if (scope === "global" && memoryStore.global[key]) {
-    delete memoryStore.global[key];
-    deleted = true;
-  } else if (username && memoryStore.users[username]?.[key]) {
-    delete memoryStore.users[username][key];
-    deleted = true;
-  }
+): Promise<string> {
+  const query = scope === "global" ? { key, scope: "global" } : { key, scope: "user", username };
+  const result = await Memory.deleteOne(query);
 
-  if (deleted) {
-    saveMemoryStore(memoryStore);
+  if (result.deletedCount > 0) {
     return JSON.stringify({ success: true, message: `Forgot "${key}"` });
   }
   return JSON.stringify({ success: false, message: `No memory found for "${key}"` });
 }
 
-function handleList(username: string | null): string {
+async function handleList(username: string | null): Promise<string> {
   const memories: { scope: string; key: string; value: string; createdBy: string }[] = [];
 
-  for (const [k, v] of Object.entries(memoryStore.global)) {
-    memories.push({ scope: "global", key: k, value: v.value, createdBy: v.createdBy });
+  // Get global memories
+  const globalMemories = await Memory.find({ scope: "global" });
+  for (const m of globalMemories) {
+    memories.push({ scope: "global", key: m.key, value: m.value, createdBy: m.createdBy });
   }
 
-  if (username && memoryStore.users[username]) {
-    for (const [k, v] of Object.entries(memoryStore.users[username])) {
-      memories.push({ scope: "user", key: k, value: v.value, createdBy: v.createdBy });
+  // Get user memories
+  if (username) {
+    const userMemories = await Memory.find({ scope: "user", username });
+    for (const m of userMemories) {
+      memories.push({ scope: "user", key: m.key, value: m.value, createdBy: m.createdBy });
     }
   }
 
@@ -251,13 +233,13 @@ function handleList(username: string | null): string {
 }
 
 // Memory store operations
-export function memoryStoreOperation(
+export async function memoryStoreOperation(
   action: "save" | "get" | "delete" | "list",
   key: string | null,
   value: string | null,
   scope: "global" | "user",
   username: string | null
-): string {
+): Promise<string> {
   toolLogger.info({ action, key, scope, username }, "Memory store operation");
 
   try {
@@ -266,22 +248,22 @@ export function memoryStoreOperation(
         if (!key || !value) {
           return JSON.stringify({ error: "Key and value are required for save" });
         }
-        return handleSave(key, value, scope, username);
+        return await handleSave(key, value, scope, username);
 
       case "get":
         if (!key) {
           return JSON.stringify({ error: "Key is required for get" });
         }
-        return handleGet(key, scope, username);
+        return await handleGet(key, scope, username);
 
       case "delete":
         if (!key) {
           return JSON.stringify({ error: "Key is required for delete" });
         }
-        return handleDelete(key, scope, username);
+        return await handleDelete(key, scope, username);
 
       case "list":
-        return handleList(username);
+        return await handleList(username);
 
       default:
         return JSON.stringify({ error: `Unknown action: ${action}` });
@@ -293,64 +275,194 @@ export function memoryStoreOperation(
   }
 }
 
-// Helper to add memories with truncation
-function addMemoriesFromEntries(
-  entries: [string, MemoryItem][],
-  header: string,
-  memories: string[],
-  state: { totalLength: number },
-  maxLength: number
-): void {
-  if (entries.length === 0) return;
-
-  memories.push(header);
-  for (const [key, item] of entries) {
-    const line = `• ${key}: ${item.value}`;
-    if (state.totalLength + line.length > maxLength) {
-      memories.push("... (truncated)");
-      return;
-    }
-    memories.push(line);
-    state.totalLength += line.length;
-  }
+interface MemoryItem {
+  key: string;
+  value: string;
 }
 
-export function memoryRecall(
+interface CollectResult {
+  lines: string[];
+  totalLength: number;
+}
+
+// Collect memories into formatted lines with length limit
+function collectMemories(
+  items: MemoryItem[],
+  header: string,
+  currentLength: number,
+  maxLength: number,
+): CollectResult {
+  const lines: string[] = [];
+  let totalLength = currentLength;
+
+  if (items.length === 0) {
+    return { lines, totalLength };
+  }
+
+  lines.push(header);
+  for (const m of items) {
+    const line = `• ${m.key}: ${m.value}`;
+    if (totalLength + line.length > maxLength) {
+      lines.push("... (truncated)");
+      break;
+    }
+    lines.push(line);
+    totalLength += line.length;
+  }
+
+  return { lines, totalLength };
+}
+
+export async function memoryRecall(
   username: string | null,
-  includeGlobal = true
-): string {
+  includeGlobal = true,
+): Promise<string> {
   toolLogger.info({ username, includeGlobal }, "Recalling memories");
 
-  const memories: string[] = [];
-  const state = { totalLength: 0 };
   const maxTotalLength = 2000;
+  const allLines: string[] = [];
+  let currentLength = 0;
 
   if (includeGlobal) {
-    addMemoriesFromEntries(
-      Object.entries(memoryStore.global),
-      "=== Global Memories ===",
-      memories,
-      state,
-      maxTotalLength
-    );
+    const globalMemories = await Memory.find({ scope: "global" });
+    const result = collectMemories(globalMemories, "=== Global Memories ===", currentLength, maxTotalLength);
+    allLines.push(...result.lines);
+    currentLength = result.totalLength;
   }
 
-  if (username && memoryStore.users[username]) {
-    addMemoriesFromEntries(
-      Object.entries(memoryStore.users[username]),
-      `=== Memories about ${username} ===`,
-      memories,
-      state,
-      maxTotalLength
-    );
+  if (username) {
+    const userMemories = await Memory.find({ scope: "user", username });
+    const result = collectMemories(userMemories, `=== Memories about ${username} ===`, currentLength, maxTotalLength);
+    allLines.push(...result.lines);
   }
 
-  if (memories.length === 0) {
+  if (allLines.length === 0) {
     return JSON.stringify({ hasMemories: false, message: "No memories stored yet." });
   }
 
-  return JSON.stringify({
-    hasMemories: true,
-    summary: memories.join("\n"),
-  });
+  return JSON.stringify({ hasMemories: true, summary: allLines.join("\n") });
+}
+
+// Search memories by keyword
+export async function searchMemory(
+  query: string,
+  username: string | null,
+  scope: "global" | "user" | null,
+): Promise<string> {
+  toolLogger.info({ query, username, scope }, "Searching memories");
+
+  try {
+    const regex = new RegExp(query, "i");
+    const filter: Record<string, unknown> = {
+      $or: [{ key: regex }, { value: regex }],
+    };
+
+    if (scope) filter.scope = scope;
+    if (username) filter.username = username;
+
+    const results = await Memory.find(filter).limit(20).sort({ updatedAt: -1 });
+
+    if (results.length === 0) {
+      return JSON.stringify({ found: false, message: `No memories found matching "${query}"` });
+    }
+
+    const memories = results.map((m) => ({
+      key: m.key,
+      value: m.value,
+      scope: m.scope,
+      username: m.username,
+      createdBy: m.createdBy,
+    }));
+
+    return JSON.stringify({ found: true, count: memories.length, memories });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    toolLogger.error({ error: errorMessage }, "Memory search failed");
+    return JSON.stringify({ error: errorMessage });
+  }
+}
+
+interface ConversationMatch {
+  channelId: string;
+  author: string;
+  content: string;
+  isBot: boolean;
+  timestamp: Date;
+}
+
+// Check if a message matches search criteria
+function messageMatchesCriteria(
+  content: string,
+  msgAuthor: string,
+  queryRegex: RegExp,
+  authorFilter: string | null,
+): boolean {
+  const contentMatches = queryRegex.test(content);
+  const authorMatches = !authorFilter || new RegExp(authorFilter, "i").test(msgAuthor);
+  return contentMatches && authorMatches;
+}
+
+// Truncate content if too long
+function truncateContent(content: string, maxLen = 200): string {
+  return content.length > maxLen ? content.slice(0, maxLen - 3) + "..." : content;
+}
+
+// Extract matching messages from conversations
+function extractMatchingMessages(
+  conversations: Array<{ channelId: string; messages: Array<{ author: string; content: string; isBot: boolean; timestamp: Date }> }>,
+  queryRegex: RegExp,
+  authorFilter: string | null,
+): ConversationMatch[] {
+  const matches: ConversationMatch[] = [];
+
+  for (const conv of conversations) {
+    for (const msg of conv.messages) {
+      if (messageMatchesCriteria(msg.content, msg.author, queryRegex, authorFilter)) {
+        matches.push({
+          channelId: conv.channelId,
+          author: msg.author,
+          content: truncateContent(msg.content),
+          isBot: msg.isBot,
+          timestamp: msg.timestamp,
+        });
+      }
+    }
+  }
+
+  return matches;
+}
+
+// Search conversation history
+export async function searchConversation(
+  query: string,
+  author: string | null,
+  channelId: string | null,
+  limit: number | null,
+): Promise<string> {
+  toolLogger.info({ query, author, channelId, limit }, "Searching conversations");
+
+  try {
+    const maxLimit = Math.min(limit ?? 20, 50);
+    const regex = new RegExp(query, "i");
+
+    const filter: Record<string, unknown> = {};
+    if (channelId) filter.channelId = channelId;
+
+    const conversations = await Conversation.find(filter).lean();
+    const matchingMessages = extractMatchingMessages(conversations, regex, author);
+
+    // Sort by timestamp descending and limit
+    matchingMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const results = matchingMessages.slice(0, maxLimit);
+
+    if (results.length === 0) {
+      return JSON.stringify({ found: false, message: `No conversation history found matching "${query}"` });
+    }
+
+    return JSON.stringify({ found: true, count: results.length, messages: results });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    toolLogger.error({ error: errorMessage }, "Conversation search failed");
+    return JSON.stringify({ error: errorMessage });
+  }
 }

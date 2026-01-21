@@ -1,0 +1,34 @@
+import mongoose, { Schema, Document } from "mongoose";
+
+export interface IConversationMessage {
+  messageId?: string;
+  author: string;
+  content: string;
+  isBot: boolean;
+  timestamp: Date;
+}
+
+export interface IConversation extends Document {
+  channelId: string;
+  messages: IConversationMessage[];
+  lastInteraction: Date;
+}
+
+const MessageSchema = new Schema<IConversationMessage>(
+  {
+    messageId: { type: String, index: true },
+    author: { type: String, required: true },
+    content: { type: String, required: true },
+    isBot: { type: Boolean, required: true },
+    timestamp: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const ConversationSchema = new Schema<IConversation>({
+  channelId: { type: String, required: true, unique: true },
+  messages: { type: [MessageSchema], default: [] },
+  lastInteraction: { type: Date, default: Date.now },
+});
+
+export const Conversation = mongoose.model<IConversation>("Conversation", ConversationSchema);

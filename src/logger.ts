@@ -15,3 +15,4 @@ export const logger = pino({
 export const botLogger = logger.child({ module: "bot" });
 export const aiLogger = logger.child({ module: "ai" });
 export const toolLogger = logger.child({ module: "tools" });
+export const syncLogger = logger.child({ module: "sync" });
