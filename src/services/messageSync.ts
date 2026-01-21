@@ -1,4 +1,9 @@
-import type { Client, TextChannel, NewsChannel, ThreadChannel } from "discord.js";
+import type {
+  Client,
+  TextChannel,
+  NewsChannel,
+  ThreadChannel,
+} from "discord.js";
 import { Conversation, type IConversation } from "../db/models";
 import { syncLogger } from "../logger";
 
@@ -19,12 +24,16 @@ function isMessageableChannel(channel: unknown): channel is MessageableChannel {
     channel !== null &&
     typeof channel === "object" &&
     "messages" in channel &&
-    typeof (channel as { messages: { fetch: unknown } }).messages?.fetch === "function"
+    typeof (channel as { messages: { fetch: unknown } }).messages?.fetch ===
+      "function"
   );
 }
 
 // Check if a single message exists in Discord
-async function messageExists(channel: MessageableChannel, messageId: string): Promise<boolean> {
+async function messageExists(
+  channel: MessageableChannel,
+  messageId: string,
+): Promise<boolean> {
   try {
     await channel.messages.fetch(messageId);
     return true;
@@ -36,7 +45,7 @@ async function messageExists(channel: MessageableChannel, messageId: string): Pr
 // Process a batch of messages and return IDs that no longer exist
 async function findDeletedMessages(
   channel: MessageableChannel,
-  messageIds: string[]
+  messageIds: string[],
 ): Promise<string[]> {
   const deleted: string[] = [];
 
@@ -58,14 +67,31 @@ function sleep(ms: number): Promise<void> {
 // Sync a single conversation's messages with Discord
 async function syncConversation(
   client: Client,
-  conversation: IConversation
+  conversation: IConversation,
 ): Promise<{ channelId: string; deleted: number; skipped: number }> {
   const channelId = conversation.channelId;
   const messagesWithIds = conversation.messages.filter((m) => m.messageId);
+  const messagesWithoutIds =
+    conversation.messages.length - messagesWithIds.length;
 
   if (messagesWithIds.length === 0) {
-    return { channelId, deleted: 0, skipped: conversation.messages.length };
+    if (messagesWithoutIds > 0) {
+      syncLogger.debug(
+        { channelId, messagesWithoutIds },
+        "No messages with IDs to sync (legacy messages)",
+      );
+    }
+    return { channelId, deleted: 0, skipped: messagesWithoutIds };
   }
+
+  syncLogger.debug(
+    {
+      channelId,
+      withIds: messagesWithIds.length,
+      withoutIds: messagesWithoutIds,
+    },
+    "Syncing channel",
+  );
 
   // Try to get the channel
   let channel: MessageableChannel;
@@ -99,14 +125,17 @@ async function syncConversation(
 
   // Remove deleted messages from the database
   if (deletedIds.length > 0) {
+    syncLogger.info(
+      { channelId, deletedIds },
+      "Removing deleted messages from DB",
+    );
     await Conversation.updateOne(
       { channelId },
-      { $pull: { messages: { messageId: { $in: deletedIds } } } }
+      { $pull: { messages: { messageId: { $in: deletedIds } } } },
     );
   }
 
-  const skipped = conversation.messages.filter((m) => !m.messageId).length;
-  return { channelId, deleted: deletedIds.length, skipped };
+  return { channelId, deleted: deletedIds.length, skipped: messagesWithoutIds };
 }
 
 // Run a full sync across all conversations
@@ -140,7 +169,7 @@ async function runSync(client: Client): Promise<void> {
         skipped: totalSkipped,
         elapsed: `${elapsed}s`,
       },
-      "Message sync sweep completed"
+      "Message sync sweep completed",
     );
   } catch (error) {
     syncLogger.error({ error }, "Message sync sweep failed");
@@ -156,7 +185,10 @@ export function startMessageSync(client: Client): void {
     return;
   }
 
-  syncLogger.info({ intervalMs: SYNC_INTERVAL_MS }, "Starting message sync service");
+  syncLogger.info(
+    { intervalMs: SYNC_INTERVAL_MS },
+    "Starting message sync service",
+  );
 
   // Run immediately on startup
   runSync(client);
@@ -180,16 +212,22 @@ export async function triggerSync(client: Client): Promise<void> {
 }
 
 // Delete a single message from DB (called on messageDelete event)
-export async function deleteMessageFromDb(channelId: string, messageId: string): Promise<void> {
+export async function deleteMessageFromDb(
+  channelId: string,
+  messageId: string,
+): Promise<void> {
   try {
     const result = await Conversation.updateOne(
       { channelId },
-      { $pull: { messages: { messageId } } }
+      { $pull: { messages: { messageId } } },
     );
     if (result.modifiedCount > 0) {
       syncLogger.debug({ channelId, messageId }, "Deleted message from DB");
     }
   } catch (error) {
-    syncLogger.error({ error, channelId, messageId }, "Failed to delete message from DB");
+    syncLogger.error(
+      { error, channelId, messageId },
+      "Failed to delete message from DB",
+    );
   }
 }

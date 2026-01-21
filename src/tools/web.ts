@@ -77,9 +77,14 @@ function extractCitations(response: WebSearchResponse): Array<{ url: string; tit
     .map((a) => ({ url: a.url!, title: a.title ?? a.url! }));
 }
 
-// Perform web search using OpenRouter's web plugin
-async function performWebSearch(query: string): Promise<string> {
-  toolLogger.info({ query }, "Performing web search");
+// Shared OpenRouter web plugin request
+async function webPluginRequest(
+  prompt: string,
+  plugins: Array<{ id: string; max_results?: number }>,
+  operationName: string,
+  logContext: Record<string, unknown>
+): Promise<string> {
+  toolLogger.info(logContext, `Starting ${operationName}`);
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -89,36 +94,31 @@ async function performWebSearch(query: string): Promise<string> {
     },
     body: JSON.stringify({
       model: "openrouter/auto",
-      plugins: [{ id: "web", max_results: 10 }],
-      messages: [
-        {
-          role: "user",
-          content: `Search the web and provide comprehensive information about: ${query}\n\nInclude relevant facts, dates, sources, and any important details. Format the response clearly.`,
-        },
-      ],
+      plugins,
+      messages: [{ role: "user", content: prompt }],
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    toolLogger.error({ status: response.status, error: errorText }, "Web search API error");
-    return JSON.stringify({ error: `Web search failed with status ${response.status}`, details: errorText });
+    toolLogger.error({ status: response.status, error: errorText }, `${operationName} API error`);
+    return JSON.stringify({ error: `${operationName} failed with status ${response.status}`, details: errorText });
   }
 
   const data = (await response.json()) as WebSearchResponse;
 
   if (data.error) {
-    toolLogger.error({ error: data.error }, "Web search returned error");
-    return JSON.stringify({ error: "Web search failed", details: data.error.message ?? "Unknown error" });
+    toolLogger.error({ error: data.error }, `${operationName} returned error`);
+    return JSON.stringify({ error: `${operationName} failed`, details: data.error.message ?? "Unknown error" });
   }
 
   const content = data.choices?.[0]?.message?.content;
   if (!content) {
-    return JSON.stringify({ error: "No content returned from web search" });
+    return JSON.stringify({ error: `No content returned from ${operationName}` });
   }
 
   const citations = extractCitations(data);
-  toolLogger.info({ query, citationCount: citations.length }, "Web search complete");
+  toolLogger.info({ ...logContext, citationCount: citations.length }, `${operationName} complete`);
 
   return JSON.stringify({
     success: true,
@@ -127,56 +127,17 @@ async function performWebSearch(query: string): Promise<string> {
   });
 }
 
+// Perform web search using OpenRouter's web plugin
+async function performWebSearch(query: string): Promise<string> {
+  const prompt = `Search the web and provide comprehensive information about: ${query}\n\nInclude relevant facts, dates, sources, and any important details. Format the response clearly.`;
+  return webPluginRequest(prompt, [{ id: "web", max_results: 10 }], "Web search", { query });
+}
+
 // Fetch specific URLs using OpenRouter's web plugin
 async function fetchUrls(urls: string[]): Promise<string> {
-  toolLogger.info({ urls }, "Fetching URLs");
-
   const urlList = urls.map((u) => `- ${u}`).join("\n");
-
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openrouter/auto",
-      plugins: [{ id: "web" }],
-      messages: [
-        {
-          role: "user",
-          content: `Fetch and summarize the content from these URLs:\n${urlList}\n\nProvide the key information from each page. If a URL fails, note that it couldn't be accessed.`,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    toolLogger.error({ status: response.status, error: errorText }, "URL fetch API error");
-    return JSON.stringify({ error: `URL fetch failed with status ${response.status}`, details: errorText });
-  }
-
-  const data = (await response.json()) as WebSearchResponse;
-
-  if (data.error) {
-    toolLogger.error({ error: data.error }, "URL fetch returned error");
-    return JSON.stringify({ error: "URL fetch failed", details: data.error.message ?? "Unknown error" });
-  }
-
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    return JSON.stringify({ error: "No content returned from URL fetch" });
-  }
-
-  const citations = extractCitations(data);
-  toolLogger.info({ urlCount: urls.length, citationCount: citations.length }, "URL fetch complete");
-
-  return JSON.stringify({
-    success: true,
-    content,
-    sources: citations.length > 0 ? citations : undefined,
-  });
+  const prompt = `Fetch and summarize the content from these URLs:\n${urlList}\n\nProvide the key information from each page. If a URL fails, note that it couldn't be accessed.`;
+  return webPluginRequest(prompt, [{ id: "web" }], "URL fetch", { urls, urlCount: urls.length });
 }
 
 export async function getFetchData(

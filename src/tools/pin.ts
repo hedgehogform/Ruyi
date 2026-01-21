@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { resolveTargetMessage, formatError } from "./types";
 
 export const pinDefinition: ChatCompletionTool = {
   type: "function",
@@ -32,36 +32,14 @@ export async function managePin(
   action: "pin" | "unpin",
   messageId: string | null
 ): Promise<string> {
-  const ctx = getToolContext();
-
-  if (!ctx.channel) {
-    toolLogger.warn("No channel context available for pin");
-    return JSON.stringify({ error: "No channel context available" });
+  const result = await resolveTargetMessage(messageId, "pin");
+  if (!result.success) {
+    return JSON.stringify({ error: result.error });
   }
 
-  const channel = ctx.channel;
-  if (!("messages" in channel)) {
-    return JSON.stringify({ error: "Cannot access messages in this channel type" });
-  }
+  const targetMessage = result.message;
 
   try {
-    // Get the target message based on messageId value
-    let targetMessage;
-    if (messageId === "replied") {
-      targetMessage = ctx.referencedMessage;
-      if (!targetMessage) {
-        return JSON.stringify({ error: "The user did not reply to any message" });
-      }
-    } else if (messageId) {
-      targetMessage = await channel.messages.fetch(messageId);
-    } else {
-      targetMessage = ctx.message;
-    }
-
-    if (!targetMessage) {
-      return JSON.stringify({ error: "Could not find the target message" });
-    }
-
     if (action === "pin") {
       await targetMessage.pin();
       toolLogger.info({ messageId: targetMessage.id, action }, "Pinned message");
@@ -83,7 +61,7 @@ export async function managePin(
       });
     }
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage = formatError(error);
     toolLogger.error({ error: errorMessage, action, messageId }, "Failed to manage pin");
     return JSON.stringify({ error: "Failed to manage pin", details: errorMessage });
   }

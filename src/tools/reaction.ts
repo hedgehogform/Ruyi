@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext } from "./types";
+import { getToolContext, resolveTargetMessage, formatError } from "./types";
 
 // Find a reaction by emoji (handles unicode and custom emojis)
 function findReaction(message: Message, emoji: string): MessageReaction | undefined {
@@ -10,17 +10,6 @@ function findReaction(message: Message, emoji: string): MessageReaction | undefi
     const emojiName = r.emoji.name;
     const emojiId = r.emoji.id;
     return emojiStr === emoji || emojiName === emoji || (emojiId && emoji.includes(emojiId));
-  });
-}
-
-// Build success response
-function successResponse(action: string, emoji: string, message: Message) {
-  return JSON.stringify({
-    success: true,
-    action,
-    emoji,
-    messageId: message.id,
-    messageUrl: message.url,
   });
 }
 
@@ -60,43 +49,25 @@ export async function manageReaction(
   emoji: string,
   messageId: string | null
 ): Promise<string> {
+  const result = await resolveTargetMessage(messageId, "reaction");
+  if (!result.success) {
+    return JSON.stringify({ error: result.error });
+  }
+
+  const targetMessage = result.message;
   const ctx = getToolContext();
 
-  if (!ctx.channel) {
-    toolLogger.warn("No channel context available for reaction");
-    return JSON.stringify({ error: "No channel context available" });
-  }
-
-  const channel = ctx.channel;
-  if (!("messages" in channel)) {
-    return JSON.stringify({ error: "Cannot access messages in this channel type" });
-  }
-
   try {
-    // Get the target message based on messageId value
-    let targetMessage;
-    if (messageId === "replied") {
-      // React to the message the user replied to
-      targetMessage = ctx.referencedMessage;
-      if (!targetMessage) {
-        return JSON.stringify({ error: "The user did not reply to any message" });
-      }
-    } else if (messageId) {
-      // React to a specific message by ID
-      targetMessage = await channel.messages.fetch(messageId);
-    } else {
-      // React to the user's current message
-      targetMessage = ctx.message;
-    }
-
-    if (!targetMessage) {
-      return JSON.stringify({ error: "Could not find the target message" });
-    }
-
     if (action === "add") {
       await targetMessage.react(emoji);
       toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Added reaction");
-      return successResponse("added", emoji, targetMessage);
+      return JSON.stringify({
+        success: true,
+        action: "added",
+        emoji,
+        messageId: targetMessage.id,
+        messageUrl: targetMessage.url,
+      });
     }
 
     // Remove the bot's own reaction
@@ -106,6 +77,7 @@ export async function manageReaction(
     }
 
     // Fetch fresh message to ensure we have latest reactions
+    const channel = ctx.channel!;
     const freshMessage = await channel.messages.fetch(targetMessage.id);
     const reaction = findReaction(freshMessage, emoji);
 
@@ -121,9 +93,15 @@ export async function manageReaction(
 
     await reaction.users.remove(botUserId);
     toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Removed reaction");
-    return successResponse("removed", emoji, targetMessage);
+    return JSON.stringify({
+      success: true,
+      action: "removed",
+      emoji,
+      messageId: targetMessage.id,
+      messageUrl: targetMessage.url,
+    });
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage = formatError(error);
     toolLogger.error({ error: errorMessage, emoji, action, messageId }, "Failed to manage reaction");
     return JSON.stringify({ error: "Failed to manage reaction", details: errorMessage });
   }
