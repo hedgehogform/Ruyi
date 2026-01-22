@@ -312,10 +312,7 @@ export async function chat(
     return null;
   }
 
-  if (content) {
-    rememberMessage(channelId, "Ruyi", content, true);
-  }
-
+  // Note: Bot's reply is stored in bot.ts after sending, so we have the message ID
   return content;
 }
 

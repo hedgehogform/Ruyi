@@ -32,31 +32,42 @@ export function splitMessage(text: string, maxLength = 2000): string[] {
   return chunks;
 }
 
+export interface SentChunk {
+  id: string;
+  content: string;
+}
+
 export async function sendReplyChunks(
   message: Message,
   reply: string,
   user: string
-): Promise<void> {
+): Promise<SentChunk[]> {
   const chunks = splitMessage(reply);
+  const sentChunks: SentChunk[] = [];
+
   for (const [i, chunk] of chunks.entries()) {
     if (i === 0) {
       try {
-        await message.reply(chunk);
+        const sent = await message.reply(chunk);
+        sentChunks.push({ id: sent.id, content: chunk });
       } catch (error) {
         // If reply fails (e.g., original message was deleted), send as regular message
         const err = error as { code?: number };
         if (err.code === 50035 && "send" in message.channel) {
           botLogger.debug("Original message unavailable, sending as regular message");
-          await message.channel.send(chunk);
+          const sent = await message.channel.send(chunk);
+          sentChunks.push({ id: sent.id, content: chunk });
         } else {
           throw error;
         }
       }
     } else if ("send" in message.channel) {
-      await message.channel.send(chunk);
+      const sent = await message.channel.send(chunk);
+      sentChunks.push({ id: sent.id, content: chunk });
     }
   }
   botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
+  return sentChunks;
 }
 
 export async function fetchReplyChain(

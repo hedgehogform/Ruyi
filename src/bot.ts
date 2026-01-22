@@ -1,5 +1,5 @@
 import { ActivityType, Client, Events, GatewayIntentBits, REST, Routes, type Message } from "discord.js";
-import { chat, shouldReply } from "./ai";
+import { chat, shouldReply, rememberMessage } from "./ai";
 import { setToolContext } from "./tools";
 import { botLogger } from "./logger";
 import { handleCommands } from "./commands";
@@ -166,7 +166,11 @@ async function handleAIChat(message: Message): Promise<void> {
     await deleteStatusEmbed();
 
     if (reply) {
-      await sendReplyChunks(message, reply, user);
+      const sentChunks = await sendReplyChunks(message, reply, user);
+      // Store each chunk with its own message ID
+      for (const chunk of sentChunks) {
+        rememberMessage(message.channel.id, "Ruyi", chunk.content, true, chunk.id);
+      }
     } else {
       const usedSelfRespondingTool = [...state.toolCounts.keys()].some((t) => SELF_RESPONDING_TOOLS.has(t));
       if (!usedSelfRespondingTool) {
