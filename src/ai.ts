@@ -324,7 +324,6 @@ export async function chat(
   channelId: string,
   chatHistory: ChatMessage[] = [],
   callbacks?: ChatCallbacks,
-  imageUrls?: string[],
   messageId?: string,
 ): Promise<string | null> {
   currentHistoryContext = await buildHistoryContext(chatHistory, channelId);
@@ -337,7 +336,7 @@ export async function chat(
     },
     {
       role: "user",
-      content: buildMessageContent(userMessage, imageUrls) as any,
+      content: buildMessageContent(userMessage),
     },
   ];
 
@@ -436,13 +435,25 @@ const FREE_MODELS = [
 export async function shouldReply(
   message: string,
   botName: string,
+  channelId?: string,
 ): Promise<boolean> {
-  const response = await openai.chat.completions.create({
-    model: "openrouter/auto",
-    messages: [
-      {
-        role: "system",
-        content: `You are a context analyzer for "${botName}", a friendly Discord bot assistant (Ruyi from Nine Sols). Reply ONLY with "yes" or "no".
+  // Build history context if channelId is provided
+  let historyContext = "";
+  if (channelId) {
+    historyContext = await getMemoryContext(channelId, 15);
+  }
+
+  const historySection = historyContext
+    ? `\nPrevious chat history:\n${historyContext}`
+    : "";
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "openrouter/auto",
+      messages: [
+        {
+          role: "system",
+          content: `You are a context analyzer for "${botName}", a friendly Discord bot assistant (Ruyi from Nine Sols). Reply ONLY with "yes" or "no".
 
 Reply "yes" if:
 - Greetings like "hey", "hi", "hello", "yo", "sup", "good morning", etc.
@@ -459,17 +470,26 @@ Reply "no" if:
 - Private conversation between others
 - Just emojis, reactions, or "lol/lmao" type responses
 - Spam or nonsense
-- Very short messages with no substance (like just "ok" or "yeah" unless it's part of user's answer to the bot)
-
-Previous chat history:
-${currentHistoryContext}
+- Very short messages with no substance (like just "ok" or "yeah" unless it's part of user's answer to the bot)${historySection}
 `,
-      },
-      { role: "user", content: message },
-    ],
-    plugins: [{ id: "auto-router", allowed_models: FREE_MODELS }],
-  } as OpenRouterChatParams);
+        },
+        { role: "user", content: message },
+      ],
+      plugins: [{ id: "auto-router", allowed_models: FREE_MODELS }],
+    } as OpenRouterChatParams);
 
-  const content = response.choices[0]?.message?.content;
-  return content?.toLowerCase().trim() === "yes";
+    const content = response.choices[0]?.message?.content;
+    const result = content?.toLowerCase().trim() === "yes";
+    aiLogger.debug(
+      { message: message.slice(0, 50), result },
+      "shouldReply decision",
+    );
+    return result;
+  } catch (error) {
+    aiLogger.warn(
+      { error: (error as Error)?.message, message: message.slice(0, 50) },
+      "shouldReply failed, defaulting to no",
+    );
+    return false;
+  }
 }
