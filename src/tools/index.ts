@@ -31,6 +31,7 @@ import { pinDefinition, managePin } from "./pin";
 import { auditLogDefinition, getAuditLog } from "./audit";
 import { embedDefinition, sendEmbed } from "./embed";
 import { generateImageDefinition, generateImage } from "./image";
+import { lastfmDefinition, queryLastFm } from "./lastfm";
 
 // Collect all tool definitions
 export const toolDefinitions: ChatCompletionTool[] = [
@@ -51,6 +52,7 @@ export const toolDefinitions: ChatCompletionTool[] = [
   auditLogDefinition,
   embedDefinition,
   generateImageDefinition,
+  lastfmDefinition,
 ];
 
 // Execute a tool by name
@@ -158,6 +160,13 @@ export async function executeTool(
         args.prompt as string,
         args.aspect_ratio as string | null,
         args.image_size as string | null,
+      );
+    case "lastfm":
+      return await queryLastFm(
+        args.action as "now_playing" | "recent_tracks" | "user_info" | "top_artists" | "top_tracks" | "top_albums",
+        args.username as string,
+        args.period as "overall" | "7day" | "1month" | "3month" | "6month" | "12month" | null,
+        args.limit as number | null,
       );
     default:
       return JSON.stringify({ error: "Unknown tool: " + name });

@@ -1,8 +1,20 @@
 import OpenAI from "openai";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import { toolDefinitions, executeTool } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
 import { Conversation } from "./db/models";
+
+// OpenRouter plugin for auto-router model selection
+interface OpenRouterPlugin {
+  id: "auto-router";
+  allowed_models?: string[];
+}
+
+// Extend OpenAI params with OpenRouter-specific options
+interface OpenRouterChatParams extends ChatCompletionCreateParamsNonStreaming {
+  plugins?: OpenRouterPlugin[];
+}
 
 // In-memory cache for last interaction times (to avoid async checks everywhere)
 const lastInteractionCache = new Map<string, number>();
@@ -13,7 +25,7 @@ export async function rememberMessage(
   author: string,
   content: string,
   isBot: boolean,
-  messageId?: string
+  messageId?: string,
 ): Promise<void> {
   try {
     await Conversation.updateOne(
@@ -21,13 +33,15 @@ export async function rememberMessage(
       {
         $push: {
           messages: {
-            $each: [{ messageId, author, content, isBot, timestamp: new Date() }],
+            $each: [
+              { messageId, author, content, isBot, timestamp: new Date() },
+            ],
             $slice: -100, // Keep only last 100 messages
           },
         },
         $set: { lastInteraction: new Date() },
       },
-      { upsert: true }
+      { upsert: true },
     );
     lastInteractionCache.set(channelId, Date.now());
   } catch (error) {
@@ -36,7 +50,10 @@ export async function rememberMessage(
 }
 
 // Get conversation history from memory
-export async function getMemoryContext(channelId: string, limit = 20): Promise<string> {
+export async function getMemoryContext(
+  channelId: string,
+  limit = 20,
+): Promise<string> {
   try {
     const conversation = await Conversation.findOne({ channelId });
     if (!conversation || conversation.messages.length === 0) return "";
@@ -60,13 +77,22 @@ export function isOngoingConversation(channelId: string): boolean {
 // Load last interaction times from DB on startup
 export async function loadLastInteractions(): Promise<void> {
   try {
-    const conversations = await Conversation.find({}, { channelId: 1, lastInteraction: 1 });
+    const conversations = await Conversation.find(
+      {},
+      { channelId: 1, lastInteraction: 1 },
+    );
     for (const conv of conversations) {
       if (conv.lastInteraction) {
-        lastInteractionCache.set(conv.channelId, conv.lastInteraction.getTime());
+        lastInteractionCache.set(
+          conv.channelId,
+          conv.lastInteraction.getTime(),
+        );
       }
     }
-    aiLogger.info({ count: conversations.length }, "Loaded last interaction times");
+    aiLogger.info(
+      { count: conversations.length },
+      "Loaded last interaction times",
+    );
   } catch (error) {
     aiLogger.error({ error }, "Failed to load last interactions");
   }
@@ -94,7 +120,7 @@ Message Targeting:
 - "replied" = message user replied to (for "this message", "pin this" while replying)
 - null = user's current message
 - message ID = from search_messages results
-- NEVER type emojis in text - use manage_reaction tool
+- NEVER type emojis in text - use manage_reaction tool only if user requests reactions, Or decide yourself if appropriate.
 
 Embeds: Use send_embed for structured data (logs, tables, lists). Don't repeat embed content in text.
 
@@ -118,7 +144,10 @@ export interface ChatMessage {
 
 // Content part types for multimodal messages
 type TextContent = { type: "text"; text: string };
-type ImageContent = { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } };
+type ImageContent = {
+  type: "image_url";
+  image_url: { url: string; detail?: "auto" | "low" | "high" };
+};
 type MessageContent = TextContent | ImageContent;
 
 // Extract image URLs from fetch tool result if present
@@ -127,13 +156,23 @@ function extractImagesFromToolResult(result: string): string[] {
     const parsed = JSON.parse(result);
     if (parsed.images && Array.isArray(parsed.images)) {
       return parsed.images
-        .filter((img: unknown) => typeof img === "object" && img !== null && "image_url" in (img as Record<string, unknown>))
+        .filter(
+          (img: unknown) =>
+            typeof img === "object" &&
+            img !== null &&
+            "image_url" in (img as Record<string, unknown>),
+        )
         .map((img: { image_url: { url: string } }) => img.image_url.url);
     }
     // Also check for type: "images" response (image-only URLs)
     if (parsed.type === "images" && Array.isArray(parsed.images)) {
       return parsed.images
-        .filter((img: unknown) => typeof img === "object" && img !== null && "image_url" in (img as Record<string, unknown>))
+        .filter(
+          (img: unknown) =>
+            typeof img === "object" &&
+            img !== null &&
+            "image_url" in (img as Record<string, unknown>),
+        )
         .map((img: { image_url: { url: string } }) => img.image_url.url);
     }
   } catch {
@@ -154,7 +193,10 @@ let currentHistoryContext = "";
 // Main chat function with tool usage
 
 // Build multimodal content array for a message with optional images
-function buildMessageContent(text: string, imageUrls?: string[]): string | MessageContent[] {
+function buildMessageContent(
+  text: string,
+  imageUrls?: string[],
+): string | MessageContent[] {
   if (!imageUrls || imageUrls.length === 0) {
     return text;
   }
@@ -167,7 +209,10 @@ function buildMessageContent(text: string, imageUrls?: string[]): string | Messa
 }
 
 // Add images to a tool result message for the AI to see
-function buildToolResultWithImages(textResult: string, imageUrls: string[]): MessageContent[] {
+function buildToolResultWithImages(
+  textResult: string,
+  imageUrls: string[],
+): MessageContent[] {
   const content: MessageContent[] = [{ type: "text", text: textResult }];
   for (const url of imageUrls) {
     content.push({ type: "image_url", image_url: { url, detail: "auto" } });
@@ -183,20 +228,33 @@ async function buildHistoryContext(
   const replyChainMessages = chatHistory.filter((m) => m.isReplyContext);
   const regularHistory = chatHistory.filter((m) => !m.isReplyContext);
 
-  const replyChainContext = replyChainMessages.length > 0
-    ? "\n\nReply chain (the user is replying to this conversation thread):\n" +
-      replyChainMessages.map((m) => m.author + ": " + m.content).join("\n")
-    : "";
+  const replyChainContext =
+    replyChainMessages.length > 0
+      ? "\n\nReply chain (the user is replying to this conversation thread):\n" +
+        replyChainMessages.map((m) => m.author + ": " + m.content).join("\n")
+      : "";
 
-  const discordHistory = regularHistory.map((m) => m.author + ": " + m.content).join("\n");
+  const discordHistory = regularHistory
+    .map((m) => m.author + ": " + m.content)
+    .join("\n");
   const memoryHistory = await getMemoryContext(channelId, 30);
 
-  const historyContext = discordHistory.length > 100 ? discordHistory : memoryHistory || discordHistory;
-  return replyChainContext + (historyContext ? "\n\nRecent chat history:\n" + historyContext : "");
+  const historyContext =
+    discordHistory.length > 100
+      ? discordHistory
+      : memoryHistory || discordHistory;
+  return (
+    replyChainContext +
+    (historyContext ? "\n\nRecent chat history:\n" + historyContext : "")
+  );
 }
 
 // Build system message for chat
-function buildSystemMessage(username: string, historyContext: string, isOngoing: boolean): string {
+function buildSystemMessage(
+  username: string,
+  historyContext: string,
+  isOngoing: boolean,
+): string {
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
@@ -208,7 +266,11 @@ function buildSystemMessage(username: string, historyContext: string, isOngoing:
 
 // Execute a single tool call and return the message to add
 async function executeToolCall(
-  toolCall: { id: string; type: string; function: { name: string; arguments: string } },
+  toolCall: {
+    id: string;
+    type: string;
+    function: { name: string; arguments: string };
+  },
   callbacks?: ChatCallbacks,
 ): Promise<OpenAI.ChatCompletionToolMessageParam> {
   const func = toolCall.function;
@@ -218,12 +280,18 @@ async function executeToolCall(
   callbacks?.onToolStart?.(func.name, args);
 
   const result = await executeTool(func.name, args);
-  aiLogger.debug({ tool: func.name, resultLength: result.length }, "Tool completed");
+  aiLogger.debug(
+    { tool: func.name, resultLength: result.length },
+    "Tool completed",
+  );
   callbacks?.onToolEnd?.(func.name);
 
   const toolImages = extractImagesFromToolResult(result);
   if (toolImages.length > 0) {
-    aiLogger.info({ imageCount: toolImages.length }, "Tool returned images for visual analysis");
+    aiLogger.info(
+      { imageCount: toolImages.length },
+      "Tool returned images for visual analysis",
+    );
     return {
       role: "tool",
       tool_call_id: toolCall.id,
@@ -235,7 +303,11 @@ async function executeToolCall(
 
 // Process all tool calls from assistant message
 async function processToolCalls(
-  toolCalls: Array<{ id: string; type: string; function: { name: string; arguments: string } }>,
+  toolCalls: Array<{
+    id: string;
+    type: string;
+    function: { name: string; arguments: string };
+  }>,
   callbacks?: ChatCallbacks,
 ): Promise<OpenAI.ChatCompletionToolMessageParam[]> {
   const results: OpenAI.ChatCompletionToolMessageParam[] = [];
@@ -253,14 +325,20 @@ export async function chat(
   chatHistory: ChatMessage[] = [],
   callbacks?: ChatCallbacks,
   imageUrls?: string[],
-  messageId?: string
+  messageId?: string,
 ): Promise<string | null> {
   currentHistoryContext = await buildHistoryContext(chatHistory, channelId);
   const isOngoing = isOngoingConversation(channelId);
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemMessage(username, currentHistoryContext, isOngoing) },
-    { role: "user", content: buildMessageContent(userMessage, imageUrls) as any },
+    {
+      role: "system",
+      content: buildSystemMessage(username, currentHistoryContext, isOngoing),
+    },
+    {
+      role: "user",
+      content: buildMessageContent(userMessage, imageUrls) as any,
+    },
   ];
 
   rememberMessage(channelId, username, userMessage, false, messageId);
@@ -284,8 +362,14 @@ export async function chat(
     iterations++;
     messages.push(assistantMessage);
 
-    aiLogger.info({ toolCount: assistantMessage.tool_calls.length, iteration: iterations }, "Processing tool calls");
-    const toolResults = await processToolCalls(assistantMessage.tool_calls as any, callbacks);
+    aiLogger.info(
+      { toolCount: assistantMessage.tool_calls.length, iteration: iterations },
+      "Processing tool calls",
+    );
+    const toolResults = await processToolCalls(
+      assistantMessage.tool_calls as any,
+      callbacks,
+    );
     messages.push(...toolResults);
 
     callbacks?.onThinking?.();
@@ -308,7 +392,10 @@ export async function chat(
   // This can happen with some models - filter it out
   const content = assistantMessage.content;
   if (content && isLikelyMalformedToolCall(content)) {
-    aiLogger.warn({ content: content.slice(0, 100) }, "Model returned raw tool JSON instead of calling tool");
+    aiLogger.warn(
+      { content: content.slice(0, 100) },
+      "Model returned raw tool JSON instead of calling tool",
+    );
     return null;
   }
 
@@ -320,7 +407,11 @@ export async function chat(
 function isLikelyMalformedToolCall(content: string): boolean {
   const trimmed = content.trim();
   // Check for patterns like [{"name": "tool_name", "arguments": ...}]
-  if (trimmed.startsWith("[{") && trimmed.includes('"name"') && trimmed.includes('"arguments"')) {
+  if (
+    trimmed.startsWith("[{") &&
+    trimmed.includes('"name"') &&
+    trimmed.includes('"arguments"')
+  ) {
     return true;
   }
   // Check for {"name": "tool_name", "arguments": ...}
@@ -330,10 +421,21 @@ function isLikelyMalformedToolCall(content: string): boolean {
   return false;
 }
 
+// Free models for the context analyzer (to avoid wasting credits on yes/no questions)
+const FREE_MODELS = [
+  "deepseek/deepseek-r1-0528:free",
+  "deepseek/deepseek-r1:free",
+  "google/gemini-2.0-flash-exp:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "qwen/qwq-32b:free",
+  "mistralai/devstral-2512:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+];
+
 // Check if the bot should reply to a message based on context
 export async function shouldReply(
   message: string,
-  botName: string
+  botName: string,
 ): Promise<boolean> {
   const response = await openai.chat.completions.create({
     model: "openrouter/auto",
@@ -357,7 +459,7 @@ Reply "no" if:
 - Private conversation between others
 - Just emojis, reactions, or "lol/lmao" type responses
 - Spam or nonsense
-- Very short messages with no substance (like just "ok" or "yeah")
+- Very short messages with no substance (like just "ok" or "yeah" unless it's part of user's answer to the bot)
 
 Previous chat history:
 ${currentHistoryContext}
@@ -365,7 +467,8 @@ ${currentHistoryContext}
       },
       { role: "user", content: message },
     ],
-  });
+    plugins: [{ id: "auto-router", allowed_models: FREE_MODELS }],
+  } as OpenRouterChatParams);
 
   const content = response.choices[0]?.message?.content;
   return content?.toLowerCase().trim() === "yes";
