@@ -292,15 +292,6 @@ function isLikelyMalformedToolCall(content: string): boolean {
   return false;
 }
 
-// Free models for the context analyzer (to avoid wasting credits on yes/no questions)
-const FREE_MODELS = [
-  "deepseek/deepseek-r1-0528:free",
-  "google/gemini-2.0-flash-exp:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "mistralai/devstral-2512:free",
-  "nvidia/nemotron-3-nano-30b-a3b:free",
-];
-
 // Check if the bot should reply to a message based on context
 export async function shouldReply(
   message: string,
@@ -345,7 +336,6 @@ Reply "no" if:
         },
         { role: "user", content: message },
       ],
-      plugins: [{ id: "auto-router", allowedModels: FREE_MODELS }],
     });
 
     const rawContent = response.choices[0]?.message?.content;
