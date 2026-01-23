@@ -62,7 +62,11 @@ function formatTarget(entry: GuildAuditLogsEntry): {
 
   if (typeof target === "object" && "name" in target) {
     const named = target as { name: string; id?: string };
-    return { name: named.name ?? null, id: named.id ?? null, type: getTargetType(target) };
+    return {
+      name: named.name ?? null,
+      id: named.id ?? null,
+      type: getTargetType(target),
+    };
   }
 
   if (typeof target === "object" && "id" in target) {
@@ -110,8 +114,14 @@ export const auditLogTool = tool({
       .enum(actionTypes)
       .nullable()
       .describe("Filter by action type."),
-    user: z.string().nullable().describe("Filter by the user who performed the action."),
-    target_user: z.string().nullable().describe("Filter by the target of the action."),
+    user: z
+      .string()
+      .nullable()
+      .describe("Filter by the user who performed the action."),
+    target_user: z
+      .string()
+      .nullable()
+      .describe("Filter by the target of the action."),
     limit: z.number().nullable().describe("Maximum entries to return (1-50)."),
   }),
   execute: async ({ action_type, user, target_user, limit }) => {
@@ -126,7 +136,8 @@ export const auditLogTool = tool({
 
     try {
       const fetchOptions: { limit: number; type?: AuditLogEvent } = {
-        limit: user || target_user ? Math.min(searchLimit * 3, 100) : searchLimit,
+        limit:
+          user || target_user ? Math.min(searchLimit * 3, 100) : searchLimit,
       };
 
       if (action_type && action_type in actionTypeMap) {
@@ -141,10 +152,7 @@ export const auditLogTool = tool({
         entries = entries.filter((entry) => {
           const executor = entry.executor;
           if (!executor?.username) return false;
-          return (
-            executor.username.toLowerCase().includes(userLower) ||
-            executor.displayName.toLowerCase().includes(userLower)
-          );
+          return executor.username.toLowerCase().includes(userLower);
         });
       }
 
@@ -152,14 +160,11 @@ export const auditLogTool = tool({
         const targetLower = target_user.toLowerCase();
         entries = entries.filter((entry) => {
           const target = entry.target;
-          if (!target || typeof target !== "object" || !("username" in target)) return false;
+          if (!target || typeof target !== "object" || !("username" in target))
+            return false;
           const username = (target as { username?: string }).username;
           if (!username) return false;
-          const displayName = (target as { displayName?: string }).displayName;
-          return (
-            username.toLowerCase().includes(targetLower) ||
-            displayName?.toLowerCase().includes(targetLower)
-          );
+          return username.toLowerCase().includes(targetLower);
         });
       }
 
@@ -175,11 +180,18 @@ export const auditLogTool = tool({
           targetType: targetInfo.type,
           reason: entry.reason,
           timestamp: Math.floor(entry.createdTimestamp / 1000),
-          changes: entry.changes.map((c) => ({ key: c.key, old: c.old, new: c.new })),
+          changes: entry.changes.map((c) => ({
+            key: c.key,
+            old: c.old,
+            new: c.new,
+          })),
         };
       });
 
-      toolLogger.info({ action_type, user, target_user, found: results.length }, "Audit log search complete");
+      toolLogger.info(
+        { action_type, user, target_user, found: results.length },
+        "Audit log search complete",
+      );
 
       return {
         entries: results,
@@ -191,10 +203,14 @@ export const auditLogTool = tool({
             : "No audit log entries found matching your criteria.",
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Failed to fetch audit log");
 
-      if (errorMessage.includes("Missing Permissions") || errorMessage.includes("VIEW_AUDIT_LOG")) {
+      if (
+        errorMessage.includes("Missing Permissions") ||
+        errorMessage.includes("VIEW_AUDIT_LOG")
+      ) {
         return { error: "Missing VIEW_AUDIT_LOG permission" };
       }
 

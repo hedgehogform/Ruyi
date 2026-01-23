@@ -36,7 +36,7 @@ export const creditsCommand = new SlashCommandBuilder()
 export async function handleCreditsCommand(
   interaction: ChatInputCommandInteraction,
 ): Promise<void> {
-  botLogger.debug({ user: interaction.user.displayName }, "Credits command");
+  botLogger.debug({ user: interaction.user.username }, "Credits command");
 
   try {
     const keyHeaders = { Authorization: `Bearer ${Bun.env.MODEL_TOKEN}` };

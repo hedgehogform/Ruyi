@@ -4,22 +4,27 @@ import type { ColorResolvable, Guild, Role, GuildMember } from "discord.js";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
 
-function parseColor(color: string | undefined | null): ColorResolvable | undefined {
+function parseColor(
+  color: string | undefined | null,
+): ColorResolvable | undefined {
   if (!color) return undefined;
   return (color.startsWith("#") ? color : `#${color}`) as ColorResolvable;
 }
 
 function findRole(guild: Guild, roleName: string): Role | undefined {
-  return guild.roles.cache.find((r) => r.name.toLowerCase() === roleName.toLowerCase());
+  return guild.roles.cache.find(
+    (r) => r.name.toLowerCase() === roleName.toLowerCase(),
+  );
 }
 
-async function findMember(guild: Guild, username: string): Promise<GuildMember | undefined> {
+async function findMember(
+  guild: Guild,
+  username: string,
+): Promise<GuildMember | undefined> {
   const members = await guild.members.fetch({ query: username, limit: 10 });
   return (
     members.find(
-      (m) =>
-        m.user.username.toLowerCase() === username.toLowerCase() ||
-        m.displayName.toLowerCase() === username.toLowerCase()
+      (m) => m.user.username.toLowerCase() === username.toLowerCase(),
     ) || members.first()
   );
 }
@@ -31,11 +36,28 @@ export const manageRoleTool = tool({
   inputSchema: z.object({
     action: z
       .enum(["create", "edit", "assign", "remove"])
-      .describe("Action to perform: create a new role, edit existing role, assign role to user, or remove role from user"),
-    role_name: z.string().describe("Name of the role to create, edit, assign, or remove"),
-    new_name: z.string().nullable().describe("New name for the role (only for edit action, null otherwise)"),
-    color: z.string().nullable().describe("Hex color for the role e.g. '#FF5733' (for create/edit actions, null otherwise)"),
-    username: z.string().nullable().describe("Username to assign/remove the role to/from (for assign/remove actions, null otherwise)"),
+      .describe(
+        "Action to perform: create a new role, edit existing role, assign role to user, or remove role from user",
+      ),
+    role_name: z
+      .string()
+      .describe("Name of the role to create, edit, assign, or remove"),
+    new_name: z
+      .string()
+      .nullable()
+      .describe("New name for the role (only for edit action, null otherwise)"),
+    color: z
+      .string()
+      .nullable()
+      .describe(
+        "Hex color for the role e.g. '#FF5733' (for create/edit actions, null otherwise)",
+      ),
+    username: z
+      .string()
+      .nullable()
+      .describe(
+        "Username to assign/remove the role to/from (for assign/remove actions, null otherwise)",
+      ),
   }),
   execute: async ({ action, role_name, new_name, color, username }) => {
     const { guild } = getToolContext();
@@ -44,7 +66,10 @@ export const manageRoleTool = tool({
       return { error: "Not in a server" };
     }
 
-    toolLogger.debug({ action, role_name, new_name, color, username }, "Managing role");
+    toolLogger.debug(
+      { action, role_name, new_name, color, username },
+      "Managing role",
+    );
 
     try {
       switch (action) {
@@ -57,11 +82,18 @@ export const manageRoleTool = tool({
             color: parseColor(color),
             reason: "Created by Ruyi bot",
           });
-          toolLogger.info({ role: newRole.name, color: newRole.hexColor }, "Created role");
+          toolLogger.info(
+            { role: newRole.name, color: newRole.hexColor },
+            "Created role",
+          );
           return {
             success: true,
             action: "created",
-            role: { name: newRole.name, color: newRole.hexColor, id: newRole.id },
+            role: {
+              name: newRole.name,
+              color: newRole.hexColor,
+              id: newRole.id,
+            },
           };
         }
 
@@ -71,7 +103,9 @@ export const manageRoleTool = tool({
             return { error: `Role "${role_name}" not found` };
           }
           if (!new_name && !color) {
-            return { error: "No changes specified (provide new_name or color)" };
+            return {
+              error: "No changes specified (provide new_name or color)",
+            };
           }
           await role.edit({
             name: new_name ?? undefined,
@@ -99,15 +133,20 @@ export const manageRoleTool = tool({
             return { error: `User "${username}" not found` };
           }
           if (member.roles.cache.has(role.id)) {
-            return { error: `${member.displayName} already has the "${role.name}" role` };
+            return {
+              error: `${member.user.username} already has the "${role.name}" role`,
+            };
           }
           await member.roles.add(role, "Assigned by Ruyi bot");
-          toolLogger.info({ role: role.name, user: member.displayName }, "Assigned role");
+          toolLogger.info(
+            { role: role.name, user: member.user.username },
+            "Assigned role",
+          );
           return {
             success: true,
             action: "assigned",
             role: { name: role.name, color: role.hexColor },
-            user: member.displayName,
+            user: member.user.username,
           };
         }
 
@@ -124,15 +163,20 @@ export const manageRoleTool = tool({
             return { error: `User "${username}" not found` };
           }
           if (!member.roles.cache.has(role.id)) {
-            return { error: `${member.displayName} doesn't have the "${role.name}" role` };
+            return {
+              error: `${member.user.username} doesn't have the "${role.name}" role`,
+            };
           }
           await member.roles.remove(role, "Removed by Ruyi bot");
-          toolLogger.info({ role: role.name, user: member.displayName }, "Removed role");
+          toolLogger.info(
+            { role: role.name, user: member.user.username },
+            "Removed role",
+          );
           return {
             success: true,
             action: "removed",
             role: { name: role.name, color: role.hexColor },
-            user: member.displayName,
+            user: member.user.username,
           };
         }
 

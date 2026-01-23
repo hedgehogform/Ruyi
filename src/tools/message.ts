@@ -24,7 +24,7 @@ function matchesAuthor(msg: Message, authorFilter: string): boolean {
   const authorLower = authorFilter.toLowerCase();
   return (
     msg.author.username.toLowerCase().includes(authorLower) ||
-    msg.author.displayName.toLowerCase().includes(authorLower)
+    msg.author.username.toLowerCase().includes(authorLower)
   );
 }
 
@@ -34,7 +34,11 @@ function matchesContent(msg: Message, query: string): boolean {
 }
 
 // Helper: Filter messages by author and query
-function filterMessages(messages: Message[], author: string | null, query: string | null): Message[] {
+function filterMessages(
+  messages: Message[],
+  author: string | null,
+  query: string | null,
+): Message[] {
   let filtered = messages;
   if (author) filtered = filtered.filter((m) => matchesAuthor(m, author));
   if (query) filtered = filtered.filter((m) => matchesContent(m, query));
@@ -45,14 +49,17 @@ function filterMessages(messages: Message[], author: string | null, query: strin
 async function getChannelsToSearch(
   channelName: string | null,
   searchAllChannels: boolean | null,
-  ctx: ReturnType<typeof getToolContext>
+  ctx: ReturnType<typeof getToolContext>,
 ): Promise<TextChannel[] | string> {
   if (searchAllChannels && ctx.guild) {
     const channels = await ctx.guild.channels.fetch();
     const textChannels = channels
       .filter((c): c is TextChannel => c?.type === ChannelType.GuildText)
       .map((c) => c);
-    toolLogger.info({ channelCount: textChannels.length }, "Searching all channels");
+    toolLogger.info(
+      { channelCount: textChannels.length },
+      "Searching all channels",
+    );
     return textChannels;
   }
 
@@ -60,7 +67,8 @@ async function getChannelsToSearch(
     const channels = await ctx.guild.channels.fetch();
     const targetChannel = channels.find(
       (c): c is TextChannel =>
-        c?.type === ChannelType.GuildText && c.name.toLowerCase().includes(channelName.toLowerCase())
+        c?.type === ChannelType.GuildText &&
+        c.name.toLowerCase().includes(channelName.toLowerCase()),
     );
     if (!targetChannel) {
       return `Channel "${channelName}" not found`;
@@ -80,12 +88,13 @@ function buildFoundMessage(
   msg: Message,
   showReactions: boolean,
   includeChannel: boolean,
-  channelName?: string
+  channelName?: string,
 ): FoundMessage {
   const result: FoundMessage = {
     id: msg.id,
-    author: msg.author.displayName,
-    content: msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
+    author: msg.author.username,
+    content:
+      msg.content.slice(0, 200) + (msg.content.length > 200 ? "..." : ""),
     timestamp: Math.floor(msg.createdTimestamp / 1000),
     url: msg.url,
   };
@@ -112,18 +121,21 @@ async function searchChannel(
   searchLimit: number,
   showReactions: boolean,
   includeChannel: boolean,
-  existingCount: number
+  existingCount: number,
 ): Promise<FoundMessage[]> {
   const results: FoundMessage[] = [];
   const remaining = searchLimit - existingCount;
   if (remaining <= 0) return results;
 
-  const fetchLimit = query || author ? Math.min(searchLimit * 5, 100) : searchLimit;
+  const fetchLimit =
+    query || author ? Math.min(searchLimit * 5, 100) : searchLimit;
   const messages = await channel.messages.fetch({ limit: fetchLimit });
   const filtered = filterMessages([...messages.values()], author, query);
 
   for (const msg of filtered.slice(0, remaining)) {
-    results.push(buildFoundMessage(msg, showReactions, includeChannel, channel.name));
+    results.push(
+      buildFoundMessage(msg, showReactions, includeChannel, channel.name),
+    );
   }
 
   return results;
@@ -134,14 +146,41 @@ export const searchMessagesTool = tool({
   description:
     "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction or delete_messages.",
   inputSchema: z.object({
-    query: z.string().nullable().describe("Text to search for in message content. Leave null to get recent messages."),
-    author: z.string().nullable().describe("Filter by author username or display name."),
-    channel_name: z.string().nullable().describe("Name of a specific channel to search in."),
-    search_all_channels: z.boolean().nullable().describe("If true, search across ALL text channels."),
-    limit: z.number().nullable().describe("Maximum number of messages to return (1-100, default 10)."),
-    include_reactions: z.boolean().nullable().describe("Whether to include reaction details. Default true."),
+    query: z
+      .string()
+      .nullable()
+      .describe(
+        "Text to search for in message content. Leave null to get recent messages.",
+      ),
+    author: z
+      .string()
+      .nullable()
+      .describe("Filter by author username or display name."),
+    channel_name: z
+      .string()
+      .nullable()
+      .describe("Name of a specific channel to search in."),
+    search_all_channels: z
+      .boolean()
+      .nullable()
+      .describe("If true, search across ALL text channels."),
+    limit: z
+      .number()
+      .nullable()
+      .describe("Maximum number of messages to return (1-100, default 10)."),
+    include_reactions: z
+      .boolean()
+      .nullable()
+      .describe("Whether to include reaction details. Default true."),
   }),
-  execute: async ({ query, author, channel_name, search_all_channels, limit, include_reactions }) => {
+  execute: async ({
+    query,
+    author,
+    channel_name,
+    search_all_channels,
+    limit,
+    include_reactions,
+  }) => {
     const ctx = getToolContext();
 
     if (!ctx.guild && search_all_channels) {
@@ -152,7 +191,11 @@ export const searchMessagesTool = tool({
     const showReactions = include_reactions !== false;
 
     try {
-      const channelsResult = await getChannelsToSearch(channel_name, search_all_channels, ctx);
+      const channelsResult = await getChannelsToSearch(
+        channel_name,
+        search_all_channels,
+        ctx,
+      );
       if (typeof channelsResult === "string") {
         return { error: channelsResult };
       }
@@ -168,15 +211,21 @@ export const searchMessagesTool = tool({
           searchLimit,
           showReactions,
           includeChannel,
-          allResults.length
+          allResults.length,
         );
         allResults.push(...channelResults);
         if (allResults.length >= searchLimit) break;
       }
 
       toolLogger.info(
-        { query, author, channel_name, search_all_channels, found: allResults.length },
-        "Message search complete"
+        {
+          query,
+          author,
+          channel_name,
+          search_all_channels,
+          found: allResults.length,
+        },
+        "Message search complete",
       );
 
       return {
@@ -188,7 +237,8 @@ export const searchMessagesTool = tool({
             : "No messages found matching your criteria",
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Failed to search messages");
       return { error: "Failed to search messages", details: errorMessage };
     }
@@ -196,7 +246,10 @@ export const searchMessagesTool = tool({
 });
 
 // Helper: Fetch messages by IDs
-async function fetchMessagesByIds(channel: TextChannel, messageIds: string[]): Promise<Message[]> {
+async function fetchMessagesByIds(
+  channel: TextChannel,
+  messageIds: string[],
+): Promise<Message[]> {
   const messages: Message[] = [];
   for (const id of messageIds.slice(0, 100)) {
     try {
@@ -214,7 +267,7 @@ async function fetchFilteredMessages(
   channel: TextChannel,
   count: number,
   author: string | null,
-  contains: string | null
+  contains: string | null,
 ): Promise<Message[]> {
   const fetchCount = Math.min(count * 2, 100);
   const messages = await channel.messages.fetch({ limit: fetchCount });
@@ -223,9 +276,14 @@ async function fetchFilteredMessages(
 }
 
 // Helper: Delete messages with bulk delete for recent, individual for old
-async function performDeletion(channel: TextChannel, messages: Message[]): Promise<number> {
+async function performDeletion(
+  channel: TextChannel,
+  messages: Message[],
+): Promise<number> {
   const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
-  const recentMessages = messages.filter((m) => m.createdTimestamp > twoWeeksAgo);
+  const recentMessages = messages.filter(
+    (m) => m.createdTimestamp > twoWeeksAgo,
+  );
   const oldMessages = messages.filter((m) => m.createdTimestamp <= twoWeeksAgo);
 
   let deletedCount = 0;
@@ -257,10 +315,22 @@ export const deleteMessagesTool = tool({
   description:
     "Delete messages from the current channel. Can delete specific messages by ID, messages from a specific user, or bulk delete recent messages. Requires Manage Messages permission.",
   inputSchema: z.object({
-    message_ids: z.array(z.string()).nullable().describe("Array of specific message IDs to delete."),
-    author: z.string().nullable().describe("Delete messages from this specific user."),
-    count: z.number().nullable().describe("Number of recent messages to delete (1-100)."),
-    contains: z.string().nullable().describe("Only delete messages containing this text."),
+    message_ids: z
+      .array(z.string())
+      .nullable()
+      .describe("Array of specific message IDs to delete."),
+    author: z
+      .string()
+      .nullable()
+      .describe("Delete messages from this specific user."),
+    count: z
+      .number()
+      .nullable()
+      .describe("Number of recent messages to delete (1-100)."),
+    contains: z
+      .string()
+      .nullable()
+      .describe("Only delete messages containing this text."),
   }),
   execute: async ({ message_ids, author, count, contains }) => {
     const ctx = getToolContext();
@@ -277,7 +347,12 @@ export const deleteMessagesTool = tool({
       if (message_ids && message_ids.length > 0) {
         messagesToDelete = await fetchMessagesByIds(channel, message_ids);
       } else if (count && count > 0) {
-        messagesToDelete = await fetchFilteredMessages(channel, count, author, contains);
+        messagesToDelete = await fetchFilteredMessages(
+          channel,
+          count,
+          author,
+          contains,
+        );
       } else {
         return { error: "Must specify either message_ids or count" };
       }
@@ -296,7 +371,8 @@ export const deleteMessagesTool = tool({
         message: `Deleted ${deletedCount} message${deletedCount === 1 ? "" : "s"}`,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Failed to delete messages");
       return { error: "Failed to delete messages", details: errorMessage };
     }

@@ -5,7 +5,7 @@ import { getPrefix } from "../config";
 export async function handlePing(message: Message): Promise<boolean> {
   if (message.content !== `${getPrefix()}ping`) return false;
 
-  botLogger.debug({ user: message.author.displayName }, "Ping command");
+  botLogger.debug({ user: message.author.username }, "Ping command");
   await message.reply("Pong!");
   return true;
 }

@@ -15,11 +15,13 @@ export const prefixCommand = new SlashCommandBuilder()
       .setName("new_prefix")
       .setDescription("The new prefix to use (leave empty to view current)")
       .setRequired(false)
-      .setMaxLength(5)
+      .setMaxLength(5),
   )
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-export async function handlePrefixCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function handlePrefixCommand(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
   const newPrefix = interaction.options.getString("new_prefix");
 
   if (!newPrefix) {
@@ -33,7 +35,10 @@ export async function handlePrefixCommand(interaction: ChatInputCommandInteracti
   const oldPrefix = getPrefix();
   setPrefix(newPrefix);
 
-  botLogger.info({ oldPrefix, newPrefix, user: interaction.user.displayName }, "Prefix changed");
+  botLogger.info(
+    { oldPrefix, newPrefix, user: interaction.user.username },
+    "Prefix changed",
+  );
   await interaction.reply({
     content: `Prefix changed from \`${oldPrefix}\` to \`${newPrefix}\``,
     flags: MessageFlags.Ephemeral,

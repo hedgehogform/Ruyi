@@ -21,16 +21,14 @@ export const userInfoTool = tool({
       const members = await guild.members.fetch({ query: username, limit: 10 });
       const member =
         members.find(
-          (m) =>
-            m.user.username.toLowerCase() === username.toLowerCase() ||
-            m.displayName.toLowerCase() === username.toLowerCase()
+          (m) => m.user.username.toLowerCase() === username.toLowerCase(),
         ) || members.first();
       if (!member) {
         toolLogger.warn({ username }, "User not found");
         return { error: "User not found: " + username };
       }
       const user = member.user;
-      toolLogger.info({ username, found: member.displayName }, "Found user");
+      toolLogger.info({ username, found: member.user.username }, "Found user");
       return {
         username: user.username,
         displayName: member.displayName,

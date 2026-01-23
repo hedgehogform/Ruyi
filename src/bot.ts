@@ -52,7 +52,7 @@ function setTypingStatus(username: string) {
 
 async function shouldBotRespond(
   content: string,
-  user: string,
+  username: string,
   channelName: string | null,
   isMentioned: boolean,
   isDM: boolean,
@@ -60,7 +60,12 @@ async function shouldBotRespond(
 ): Promise<boolean> {
   if (isMentioned || isDM) {
     botLogger.info(
-      { user, channel: channelName, mentioned: isMentioned, dm: isDM },
+      {
+        user: username,
+        channel: channelName,
+        mentioned: isMentioned,
+        dm: isDM,
+      },
       "Replying to mention/DM",
     );
     return true;
@@ -68,22 +73,22 @@ async function shouldBotRespond(
 
   try {
     botLogger.debug(
-      { user, channel: channelName, content: content.slice(0, 50) },
+      { user: username, channel: channelName, content: content.slice(0, 50) },
       "Checking if should reply",
     );
     const shouldRespond = await shouldReply(
       content,
-      client.user?.displayName ?? "Bot",
+      client.user?.username ?? "Bot",
       channelId,
     );
     if (shouldRespond) {
       botLogger.info(
-        { user, channel: channelName, content: content.slice(0, 50) },
+        { user: username, channel: channelName, content: content.slice(0, 50) },
         "Decided to reply to message",
       );
     } else {
       botLogger.debug(
-        { user, channel: channelName, content: content.slice(0, 50) },
+        { user: username, channel: channelName, content: content.slice(0, 50) },
         "Decided NOT to reply to message",
       );
     }
@@ -92,7 +97,7 @@ async function shouldBotRespond(
     botLogger.error(
       {
         error: (error as Error)?.message,
-        user,
+        user: username,
         channel: channelName,
         content: content.slice(0, 50),
       },
@@ -107,12 +112,12 @@ async function handleAIChat(message: Message): Promise<void> {
   const isDM = message.channel.isDMBased();
   const content = message.content.replaceAll(/<@!?\d+>/g, "").trim();
 
-  const user = message.author.displayName;
+  const username = message.author.username;
   const channelName = "name" in message.channel ? message.channel.name : "DM";
 
   const shouldRespond = await shouldBotRespond(
     content,
-    user,
+    username,
     channelName,
     isMentioned,
     isDM,
@@ -143,7 +148,7 @@ async function handleAIChat(message: Message): Promise<void> {
     },
   };
   typingControl.start();
-  setTypingStatus(user);
+  setTypingStatus(username);
 
   const [replyChain, chatHistory, referencedMessage] = await Promise.all([
     fetchReplyChain(message),
@@ -190,7 +195,7 @@ async function handleAIChat(message: Message): Promise<void> {
   try {
     const reply = await chat(
       content,
-      user,
+      username,
       message.channel.id,
       combinedHistory,
       callbacks,
@@ -199,7 +204,7 @@ async function handleAIChat(message: Message): Promise<void> {
     await deleteStatusEmbed();
 
     if (reply) {
-      const sentChunks = await sendReplyChunks(message, reply, user);
+      const sentChunks = await sendReplyChunks(message, reply, username);
       // Store each chunk with its own message ID
       for (const chunk of sentChunks) {
         rememberMessage(
@@ -225,7 +230,11 @@ async function handleAIChat(message: Message): Promise<void> {
       error?: { message?: string };
     };
     botLogger.error(
-      { status: err?.status || err?.code, error: err?.error?.message, user },
+      {
+        status: err?.status || err?.code,
+        error: err?.error?.message,
+        user: username,
+      },
       "Failed to generate reply",
     );
     await deleteStatusEmbed();

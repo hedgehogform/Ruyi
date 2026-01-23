@@ -40,7 +40,7 @@ export interface SentChunk {
 export async function sendReplyChunks(
   message: Message,
   reply: string,
-  user: string
+  user: string,
 ): Promise<SentChunk[]> {
   const chunks = splitMessage(reply);
   const sentChunks: SentChunk[] = [];
@@ -54,7 +54,9 @@ export async function sendReplyChunks(
         // If reply fails (e.g., original message was deleted), send as regular message
         const err = error as { code?: number };
         if (err.code === 50035 && "send" in message.channel) {
-          botLogger.debug("Original message unavailable, sending as regular message");
+          botLogger.debug(
+            "Original message unavailable, sending as regular message",
+          );
           const sent = await message.channel.send(chunk);
           sentChunks.push({ id: sent.id, content: chunk });
         } else {
@@ -66,34 +68,42 @@ export async function sendReplyChunks(
       sentChunks.push({ id: sent.id, content: chunk });
     }
   }
-  botLogger.info({ user, replyLength: reply.length, chunks: chunks.length }, "Sent reply");
+  botLogger.info(
+    { user, replyLength: reply.length, chunks: chunks.length },
+    "Sent reply",
+  );
   return sentChunks;
 }
 
 export async function fetchReplyChain(
   message: Message,
-  maxDepth = 10
+  maxDepth = 10,
 ): Promise<ChatMessage[]> {
   const chain: ChatMessage[] = [];
-  let currentRef: { channelId: string; messageId: string } | null =
-    message.reference?.messageId
-      ? { channelId: message.channel.id, messageId: message.reference.messageId }
-      : null;
+  let currentRef: { channelId: string; messageId: string } | null = message
+    .reference?.messageId
+    ? { channelId: message.channel.id, messageId: message.reference.messageId }
+    : null;
   let depth = 0;
 
   if (!("messages" in message.channel)) return chain;
 
   while (currentRef && depth < maxDepth) {
     try {
-      const referencedMessage = await message.channel.messages.fetch(currentRef.messageId);
+      const referencedMessage = await message.channel.messages.fetch(
+        currentRef.messageId,
+      );
       chain.unshift({
-        author: referencedMessage.author.displayName,
+        author: referencedMessage.author.username,
         content: referencedMessage.content.replaceAll(/<@!?\d+>/g, "").trim(),
         isBot: referencedMessage.author.bot,
         isReplyContext: true,
       });
       currentRef = referencedMessage.reference?.messageId
-        ? { channelId: referencedMessage.channel.id, messageId: referencedMessage.reference.messageId }
+        ? {
+            channelId: referencedMessage.channel.id,
+            messageId: referencedMessage.reference.messageId,
+          }
         : null;
       depth++;
     } catch {
@@ -104,7 +114,9 @@ export async function fetchReplyChain(
   return chain;
 }
 
-export async function fetchChatHistory(message: Message): Promise<ChatMessage[]> {
+export async function fetchChatHistory(
+  message: Message,
+): Promise<ChatMessage[]> {
   const chatHistory: ChatMessage[] = [];
   if (!("messages" in message.channel)) return chatHistory;
 
@@ -113,7 +125,7 @@ export async function fetchChatHistory(message: Message): Promise<ChatMessage[]>
   for (const msg of sorted) {
     if (msg.id === message.id) continue;
     chatHistory.push({
-      author: msg.author.displayName,
+      author: msg.author.username,
       content: msg.content.replaceAll(/<@!?\d+>/g, "").trim(),
       isBot: msg.author.bot,
     });
@@ -121,7 +133,9 @@ export async function fetchChatHistory(message: Message): Promise<ChatMessage[]>
   return chatHistory;
 }
 
-export async function fetchReferencedMessage(message: Message): Promise<Message | null> {
+export async function fetchReferencedMessage(
+  message: Message,
+): Promise<Message | null> {
   if (!message.reference?.messageId || !("messages" in message.channel)) {
     return null;
   }
@@ -133,7 +147,12 @@ export async function fetchReferencedMessage(message: Message): Promise<Message 
 }
 
 export function getErrorMessage(error: unknown): string {
-  const err = error as { status?: number; code?: number; error?: { message?: string }; message?: string };
+  const err = error as {
+    status?: number;
+    code?: number;
+    error?: { message?: string };
+    message?: string;
+  };
   const status = err?.status || err?.code;
   const errorMsg = err?.error?.message || err?.message;
 
