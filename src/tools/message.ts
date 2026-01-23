@@ -22,10 +22,7 @@ interface FoundMessage {
 // Helper: Check if author matches filter
 function matchesAuthor(msg: Message, authorFilter: string): boolean {
   const authorLower = authorFilter.toLowerCase();
-  return (
-    msg.author.username.toLowerCase().includes(authorLower) ||
-    msg.author.username.toLowerCase().includes(authorLower)
-  );
+  return msg.author.username.toLowerCase().includes(authorLower);
 }
 
 // Helper: Check if content matches filter
