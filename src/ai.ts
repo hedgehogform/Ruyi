@@ -297,7 +297,6 @@ const FREE_MODELS = [
   "deepseek/deepseek-r1-0528:free",
   "google/gemini-2.0-flash-exp:free",
   "meta-llama/llama-3.3-70b-instruct:free",
-  "qwen/qwq-32b:free",
   "mistralai/devstral-2512:free",
   "nvidia/nemotron-3-nano-30b-a3b:free",
 ];
