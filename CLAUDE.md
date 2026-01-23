@@ -23,37 +23,31 @@ bun install            # Install dependencies
 ### Core Flow
 1. `main.ts` - Entry point, calls `registerEvents()` and `startBot()`
 2. `bot.ts` - Discord client setup, message handling, status embeds
-3. `ai.ts` - OpenRouter integration, tool calling loop, system prompt
+3. `ai.ts` - OpenRouter SDK integration, streaming responses, system prompt
 
-### AI Tool Calling
-The bot uses OpenAI-compatible function calling via OpenRouter. The `chat()` function in `ai.ts` implements a loop that:
-- Sends messages with `tool_choice: "auto"`
-- Executes tool calls via `executeTool()`
-- Continues looping until the AI responds with text (max 10 iterations)
+### AI Integration
+The bot uses the OpenRouter TypeScript SDK (`@openrouter/sdk`). The `chat()` function in `ai.ts`:
+- Uses `client.callModel()` with streaming enabled
+- Passes tools via `allTools` array - the SDK handles tool execution automatically
+- Streams text responses via `response.getTextStream()`
 
 ### Tools Structure (`src/tools/`)
-Each tool has a definition (`ChatCompletionTool`) and implementation function:
-- `types.ts` - Shared `ToolContext` with getter/setter pattern (avoids mutable export issues)
-- `index.ts` - Aggregates all tool definitions and the `executeTool()` switch
-- Individual tools: `searchMessages.ts`, `channelInfo.ts`, `serverInfo.ts`, `userInfo.ts`, `manageRole.ts`, `fetch.ts`
+Each tool uses the OpenRouter SDK's `tool()` helper with Zod schemas:
+- `index.ts` - Exports `allTools` array and re-exports individual tools
+- Individual tools define `name`, `description`, `inputSchema` (Zod), and `execute` function
+- Tools: `calc.ts`, `channel.ts`, `server.ts`, `user.ts`, `role.ts`, `reaction.ts`, `pin.ts`, `message.ts`, `embed.ts`, `image.ts`, `web.ts`, `memory.ts`, `audit.ts`, `lastfm.ts`
 
-Tools access Discord context (message, channel, guild) via `getToolContext()`.
+Tools access Discord context (message, channel, guild) via `getToolContext()` from `utils/types.ts`.
 
 ### Web Fetching
-The `fetch` tool uses Crawl4AI (localhost:11235) for web scraping. Request format:
-```json
-{
-  "urls": [...],
-  "browser_config": { "type": "BrowserConfig", "params": { "headless": true } },
-  "crawler_config": { "type": "CrawlerRunConfig", "params": { "stream": false, "cache_mode": "bypass" } }
-}
-```
+The `fetch` tool uses OpenRouter's web plugin for search and URL fetching.
 
 ### Status Embed
 While processing, the bot shows a status embed that updates every second showing: current status (thinking/tool/complete/error), elapsed time, and tools used. The embed is deleted after completion and the final reply is sent as plain text.
 
 ## Key Patterns
 
-- **Azure/OpenRouter compatibility**: Tool schemas must have all properties in `required` array. Optional properties use `type: ["string", "null"]` instead of omitting from required.
-- **Discord timestamps**: Use `<t:UNIX:style>` format (F=full, R=relative, D=date). Tools should return these pre-formatted.
+- **Tool definitions**: Use `tool()` from `@openrouter/sdk` with Zod schemas for `inputSchema`
+- **Discord timestamps**: Use `<t:UNIX:style>` format (F=full, R=relative, D=date)
 - **Logging**: Use child loggers from `logger.ts`: `botLogger`, `aiLogger`, `toolLogger`
+- **Streaming**: Bot streams AI responses with 1-second Discord message updates

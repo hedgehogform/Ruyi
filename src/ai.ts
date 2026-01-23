@@ -1,20 +1,8 @@
-import OpenAI from "openai";
-import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
-import { toolDefinitions, executeTool } from "./tools";
+import { OpenRouter } from "@openrouter/sdk";
+import { allTools } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
 import { Conversation } from "./db/models";
-
-// OpenRouter plugin for auto-router model selection
-interface OpenRouterPlugin {
-  id: "auto-router";
-  allowed_models?: string[];
-}
-
-// Extend OpenAI params with OpenRouter-specific options
-interface OpenRouterChatParams extends ChatCompletionCreateParamsNonStreaming {
-  plugins?: OpenRouterPlugin[];
-}
 
 // In-memory cache for last interaction times (to avoid async checks everywhere)
 const lastInteractionCache = new Map<string, number>();
@@ -110,8 +98,14 @@ Core Rules:
 - ALWAYS SEARCH for current info - your knowledge is outdated. Try different queries if first fails.
 - NEVER share failed/404 URLs. Only include successfully fetched links.
 - Use English unless asked otherwise. Chain multiple tools to gather complete info before responding.
+- Never assume you know user-specific data - ALWAYS use memory_recall first for usernames/preferences.
+Tools: Use calculator for math, memory_store to remember things, generate_image for art requests (detailed prompts work best).
 
-Tools: Use calculator for math, memory_store to remember things, memory_recall for user info, generate_image for art requests (detailed prompts work best).
+CRITICAL - Memory Recall:
+- BEFORE using lastfm, or any tool that needs user-specific data (usernames, preferences, etc.), you MUST call memory_recall first
+- Example: User says "what song am I listening to?" → First call memory_recall to get their lastfm username, THEN call lastfm with that username
+- NEVER use placeholder values like "YOUR_LASTFM_USERNAME" - if memory_recall returns nothing, ASK the user
+- Use memory_store to save usernames/preferences when users share them
 
 Vision: You can SEE uploaded images and fetched image URLs. Describe and engage with visual content.
 
@@ -128,11 +122,8 @@ Formatting: Use Discord markdown - # headings, **bold**, *italics*, \`code\`, \`
 
 Dates: Use Discord timestamps <t:UNIX:F/R/D>. Images: render URLs directly, never in code blocks.`;
 
-// OpenAI client pointing to OpenRouter
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: Bun.env.MODEL_TOKEN!,
-});
+// OpenRouter SDK client
+const client = new OpenRouter({ apiKey: Bun.env.MODEL_TOKEN! });
 
 export interface ChatMessage {
   author: string;
@@ -142,82 +133,12 @@ export interface ChatMessage {
   imageUrls?: string[];
 }
 
-// Content part types for multimodal messages
-type TextContent = { type: "text"; text: string };
-type ImageContent = {
-  type: "image_url";
-  image_url: { url: string; detail?: "auto" | "low" | "high" };
-};
-type MessageContent = TextContent | ImageContent;
-
-// Extract image URLs from fetch tool result if present
-function extractImagesFromToolResult(result: string): string[] {
-  try {
-    const parsed = JSON.parse(result);
-    if (parsed.images && Array.isArray(parsed.images)) {
-      return parsed.images
-        .filter(
-          (img: unknown) =>
-            typeof img === "object" &&
-            img !== null &&
-            "image_url" in (img as Record<string, unknown>),
-        )
-        .map((img: { image_url: { url: string } }) => img.image_url.url);
-    }
-    // Also check for type: "images" response (image-only URLs)
-    if (parsed.type === "images" && Array.isArray(parsed.images)) {
-      return parsed.images
-        .filter(
-          (img: unknown) =>
-            typeof img === "object" &&
-            img !== null &&
-            "image_url" in (img as Record<string, unknown>),
-        )
-        .map((img: { image_url: { url: string } }) => img.image_url.url);
-    }
-  } catch {
-    // Not JSON or doesn't have images
-  }
-  return [];
-}
-
 export interface ChatCallbacks {
   onThinking?: () => void;
   onToolStart?: (toolName: string, args: Record<string, unknown>) => void;
   onToolEnd?: (toolName: string) => void;
+  onStreamChunk?: (text: string, fullText: string) => void;
   onComplete?: () => void;
-}
-
-let currentHistoryContext = "";
-
-// Main chat function with tool usage
-
-// Build multimodal content array for a message with optional images
-function buildMessageContent(
-  text: string,
-  imageUrls?: string[],
-): string | MessageContent[] {
-  if (!imageUrls || imageUrls.length === 0) {
-    return text;
-  }
-
-  const content: MessageContent[] = [{ type: "text", text }];
-  for (const url of imageUrls) {
-    content.push({ type: "image_url", image_url: { url, detail: "auto" } });
-  }
-  return content;
-}
-
-// Add images to a tool result message for the AI to see
-function buildToolResultWithImages(
-  textResult: string,
-  imageUrls: string[],
-): MessageContent[] {
-  const content: MessageContent[] = [{ type: "text", text: textResult }];
-  for (const url of imageUrls) {
-    content.push({ type: "image_url", image_url: { url, detail: "auto" } });
-  }
-  return content;
 }
 
 // Build history context from chat history and memory
@@ -264,60 +185,7 @@ function buildSystemMessage(
   return `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${historyNote}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`;
 }
 
-// Execute a single tool call and return the message to add
-async function executeToolCall(
-  toolCall: {
-    id: string;
-    type: string;
-    function: { name: string; arguments: string };
-  },
-  callbacks?: ChatCallbacks,
-): Promise<OpenAI.ChatCompletionToolMessageParam> {
-  const func = toolCall.function;
-  const args = JSON.parse(func.arguments || "{}");
-
-  aiLogger.info({ tool: func.name, args }, "Executing tool");
-  callbacks?.onToolStart?.(func.name, args);
-
-  const result = await executeTool(func.name, args);
-  aiLogger.debug(
-    { tool: func.name, resultLength: result.length },
-    "Tool completed",
-  );
-  callbacks?.onToolEnd?.(func.name);
-
-  const toolImages = extractImagesFromToolResult(result);
-  if (toolImages.length > 0) {
-    aiLogger.info(
-      { imageCount: toolImages.length },
-      "Tool returned images for visual analysis",
-    );
-    return {
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content: buildToolResultWithImages(result, toolImages) as any,
-    };
-  }
-  return { role: "tool", tool_call_id: toolCall.id, content: result };
-}
-
-// Process all tool calls from assistant message
-async function processToolCalls(
-  toolCalls: Array<{
-    id: string;
-    type: string;
-    function: { name: string; arguments: string };
-  }>,
-  callbacks?: ChatCallbacks,
-): Promise<OpenAI.ChatCompletionToolMessageParam[]> {
-  const results: OpenAI.ChatCompletionToolMessageParam[] = [];
-  for (const toolCall of toolCalls) {
-    if (toolCall.type !== "function") continue;
-    results.push(await executeToolCall(toolCall, callbacks));
-  }
-  return results;
-}
-
+// Main chat function with tool usage and streaming
 export async function chat(
   userMessage: string,
   username: string,
@@ -326,80 +194,84 @@ export async function chat(
   callbacks?: ChatCallbacks,
   messageId?: string,
 ): Promise<string | null> {
-  currentHistoryContext = await buildHistoryContext(chatHistory, channelId);
+  const historyContext = await buildHistoryContext(chatHistory, channelId);
   const isOngoing = isOngoingConversation(channelId);
 
-  const messages: OpenAI.ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content: buildSystemMessage(username, currentHistoryContext, isOngoing),
-    },
-    {
-      role: "user",
-      content: buildMessageContent(userMessage),
-    },
-  ];
+  const systemMessage = buildSystemMessage(username, historyContext, isOngoing);
+  const userInput = userMessage;
+
+  // Remember user message in memory (non-blocking)
 
   rememberMessage(channelId, username, userMessage, false, messageId);
   aiLogger.debug({ username }, "Starting chat request");
   callbacks?.onThinking?.();
 
-  let response = await openai.chat.completions.create({
-    model: "openrouter/auto",
-    messages,
-    tools: toolDefinitions,
-    tool_choice: "auto",
-  });
-
-  let assistantMessage = response.choices[0]?.message;
-  if (!assistantMessage) return null;
-
-  let iterations = 0;
-  const maxIterations = 10;
-
-  while (assistantMessage.tool_calls?.length && iterations < maxIterations) {
-    iterations++;
-    messages.push(assistantMessage);
-
-    aiLogger.info(
-      { toolCount: assistantMessage.tool_calls.length, iteration: iterations },
-      "Processing tool calls",
+  try {
+    aiLogger.debug(
+      { model: "openrouter/auto", toolCount: allTools.length },
+      "Calling model",
     );
-    const toolResults = await processToolCalls(
-      assistantMessage.tool_calls as any,
-      callbacks,
-    );
-    messages.push(...toolResults);
 
-    callbacks?.onThinking?.();
-
-    response = await openai.chat.completions.create({
+    const response = client.callModel({
       model: "openrouter/auto",
-      messages,
-      tools: toolDefinitions,
-      tool_choice: "auto",
+      instructions: systemMessage,
+      input: userInput,
+      tools: allTools,
     });
 
-    assistantMessage = response.choices[0]?.message;
-    if (!assistantMessage) return null;
-  }
+    const pendingToolCalls = new Map<string, string>();
 
-  aiLogger.debug("Chat request completed");
-  callbacks?.onComplete?.();
+    // Stream events for tool status tracking
+    for await (const event of response.getFullResponsesStream()) {
+      if (event.type === "response.output_item.added") {
+        const item = event.item;
+        if (item.type === "function_call") {
+          const callId = item.callId ?? item.id;
+          if (callId) pendingToolCalls.set(callId, item.name);
+          aiLogger.debug({ tool: item.name }, "Tool call started");
+          callbacks?.onToolStart?.(item.name, {});
+        }
+      }
 
-  // Check if the model returned raw JSON tool call instead of actually calling the tool
-  // This can happen with some models - filter it out
-  const content = assistantMessage.content;
-  if (content && isLikelyMalformedToolCall(content)) {
-    aiLogger.warn(
-      { content: content.slice(0, 100) },
-      "Model returned raw tool JSON instead of calling tool",
+      if (event.type === "tool.result") {
+        const e = event as { toolCallId: string };
+        const toolName = pendingToolCalls.get(e.toolCallId);
+        if (toolName) {
+          aiLogger.debug({ tool: toolName }, "Tool call completed");
+          callbacks?.onToolEnd?.(toolName);
+          pendingToolCalls.delete(e.toolCallId);
+        }
+      }
+    }
+
+    // Get final text using SDK's getText()
+    const fullText = await response.getText();
+
+    aiLogger.debug(
+      { responseLength: fullText.length },
+      "Chat request completed",
     );
+    callbacks?.onComplete?.();
+
+    if (fullText && isLikelyMalformedToolCall(fullText)) {
+      aiLogger.warn(
+        { content: fullText.slice(0, 100) },
+        "Model returned raw tool JSON",
+      );
+      return null;
+    }
+
+    if (!fullText) aiLogger.warn("Chat request returned empty response");
+    return fullText || null;
+  } catch (error) {
+    const err = error as Error;
+    aiLogger.error(
+      { error: err.message, stack: err.stack, name: err.name },
+      "Chat request failed",
+    );
+    callbacks?.onComplete?.();
     return null;
   }
-
-  // Note: Bot's reply is stored in bot.ts after sending, so we have the message ID
-  return content;
 }
 
 // Check if content looks like a raw tool call JSON that wasn't properly executed
@@ -423,7 +295,6 @@ function isLikelyMalformedToolCall(content: string): boolean {
 // Free models for the context analyzer (to avoid wasting credits on yes/no questions)
 const FREE_MODELS = [
   "deepseek/deepseek-r1-0528:free",
-  "deepseek/deepseek-r1:free",
   "google/gemini-2.0-flash-exp:free",
   "meta-llama/llama-3.3-70b-instruct:free",
   "qwen/qwq-32b:free",
@@ -448,7 +319,7 @@ export async function shouldReply(
     : "";
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await client.chat.send({
       model: "openrouter/auto",
       messages: [
         {
@@ -475,11 +346,12 @@ Reply "no" if:
         },
         { role: "user", content: message },
       ],
-      plugins: [{ id: "auto-router", allowed_models: FREE_MODELS }],
-    } as OpenRouterChatParams);
+      plugins: [{ id: "auto-router", allowedModels: FREE_MODELS }],
+    });
 
-    const content = response.choices[0]?.message?.content;
-    const result = content?.toLowerCase().trim() === "yes";
+    const rawContent = response.choices[0]?.message?.content;
+    const content = typeof rawContent === "string" ? rawContent : "";
+    const result = content.toLowerCase().trim() === "yes";
     aiLogger.debug(
       { message: message.slice(0, 50), result },
       "shouldReply decision",

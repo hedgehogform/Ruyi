@@ -1,38 +1,8 @@
-import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import { tool } from "@openrouter/sdk";
+import { z } from "zod";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
-
-export const generateImageDefinition: ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "generate_image",
-    description:
-      "Generate an image using AI based on a text prompt. Use this when the user asks you to create, draw, generate, or make an image, picture, artwork, illustration, etc. The generated image will be sent directly to the Discord channel.",
-    parameters: {
-      type: "object",
-      properties: {
-        prompt: {
-          type: "string",
-          description:
-            "A detailed description of the image to generate. Be specific about style, colors, composition, mood, and details. More detailed prompts produce better results.",
-        },
-        aspect_ratio: {
-          type: ["string", "null"],
-          description:
-            "Aspect ratio for the image. Options: '1:1' (square), '16:9' (widescreen), '9:16' (portrait/mobile), '4:3' (standard), '3:4' (portrait), '3:2', '2:3', '4:5', '5:4', '21:9' (ultrawide). Default is '1:1'.",
-        },
-        image_size: {
-          type: ["string", "null"],
-          description:
-            "Resolution of the generated image. Options: '1K' (standard), '2K' (higher resolution), '4K' (highest resolution). Default is '1K'.",
-        },
-      },
-      required: ["prompt", "aspect_ratio", "image_size"],
-      additionalProperties: false,
-    },
-  },
-};
 
 interface ImageGenerationResponse {
   choices?: Array<{
@@ -41,23 +11,17 @@ interface ImageGenerationResponse {
       content?: string | null;
       images?: Array<{
         type: string;
-        image_url: {
-          url: string;
-        };
+        image_url: { url: string };
       }>;
     };
   }>;
-  error?: {
-    message?: string;
-    code?: string;
-  };
+  error?: { message?: string; code?: string };
 }
 
-// Build request body for image generation API
 function buildRequestBody(
   prompt: string,
   aspectRatio: string | null,
-  imageSize: string | null,
+  imageSize: string | null
 ): Record<string, unknown> {
   const requestBody: Record<string, unknown> = {
     model: "google/gemini-3-pro-image-preview",
@@ -75,7 +39,6 @@ function buildRequestBody(
   return requestBody;
 }
 
-// Extract and validate image data from API response
 function extractImageData(data: ImageGenerationResponse): {
   error?: string;
   imageUrl?: string;
@@ -100,7 +63,6 @@ function extractImageData(data: ImageGenerationResponse): {
   return { imageUrl, content: message?.content };
 }
 
-// Parse base64 image data from URL
 function parseBase64Image(imageUrl: string): {
   error?: string;
   format?: string;
@@ -116,12 +78,11 @@ function parseBase64Image(imageUrl: string): {
   return { format, buffer };
 }
 
-// Send generated image to Discord channel
 async function sendImageToChannel(
   channel: { send: (options: unknown) => Promise<unknown> },
   imageBuffer: Buffer,
   imageFormat: string,
-  prompt: string,
+  prompt: string
 ): Promise<void> {
   const fileName = `generated-image.${imageFormat}`;
   const attachment = new AttachmentBuilder(imageBuffer, { name: fileName });
@@ -136,90 +97,70 @@ async function sendImageToChannel(
   await channel.send({ embeds: [embed], files: [attachment] });
 }
 
-export async function generateImage(
-  prompt: string,
-  aspectRatio: string | null,
-  imageSize: string | null,
-): Promise<string> {
-  const ctx = getToolContext();
+export const generateImageTool = tool({
+  name: "generate_image",
+  description:
+    "Generate an image using AI based on a text prompt. Use this when the user asks you to create, draw, generate, or make an image, picture, artwork, illustration, etc.",
+  inputSchema: z.object({
+    prompt: z.string().describe("A detailed description of the image to generate."),
+    aspect_ratio: z
+      .string()
+      .nullable()
+      .describe("Aspect ratio: '1:1', '16:9', '9:16', '4:3', etc."),
+    image_size: z.string().nullable().describe("Resolution: '1K', '2K', or '4K'."),
+  }),
+  execute: async ({ prompt, aspect_ratio, image_size }) => {
+    const ctx = getToolContext();
 
-  if (!ctx.channel || !("send" in ctx.channel)) {
-    return JSON.stringify({ error: "No valid channel context available" });
-  }
+    if (!ctx.channel || !("send" in ctx.channel)) {
+      return { error: "No valid channel context available" };
+    }
 
-  const channel = ctx.channel as {
-    send: (options: unknown) => Promise<unknown>;
-  };
-  toolLogger.info({ prompt, aspectRatio, imageSize }, "Generating image");
+    const channel = ctx.channel as { send: (options: unknown) => Promise<unknown> };
+    toolLogger.info({ prompt, aspect_ratio, image_size }, "Generating image");
 
-  try {
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(buildRequestBody(prompt, aspectRatio, imageSize)),
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      toolLogger.error(
-        { status: response.status, error: errorText },
-        "Image generation API error",
-      );
-      return JSON.stringify({
-        error: `Image generation failed with status ${response.status}`,
-        details: errorText,
+        body: JSON.stringify(buildRequestBody(prompt, aspect_ratio, image_size)),
       });
-    }
 
-    const data = (await response.json()) as ImageGenerationResponse;
-    const extracted = extractImageData(data);
+      if (!response.ok) {
+        const errorText = await response.text();
+        toolLogger.error({ status: response.status, error: errorText }, "Image generation API error");
+        return { error: `Image generation failed with status ${response.status}`, details: errorText };
+      }
 
-    if (extracted.error) {
-      toolLogger.error({ error: extracted.error }, "Image extraction failed");
-      return JSON.stringify({
-        error: "Image generation failed",
-        details: extracted.error,
-      });
-    }
+      const data = (await response.json()) as ImageGenerationResponse;
+      const extracted = extractImageData(data);
 
-    const parsed = parseBase64Image(extracted.imageUrl!);
-    if (parsed.error) {
-      toolLogger.error(
-        { imageUrl: extracted.imageUrl?.slice(0, 100) },
-        parsed.error,
+      if (extracted.error) {
+        toolLogger.error({ error: extracted.error }, "Image extraction failed");
+        return { error: "Image generation failed", details: extracted.error };
+      }
+
+      const parsed = parseBase64Image(extracted.imageUrl!);
+      if (parsed.error) {
+        toolLogger.error({ imageUrl: extracted.imageUrl?.slice(0, 100) }, parsed.error);
+        return { error: parsed.error };
+      }
+
+      await sendImageToChannel(channel, parsed.buffer!, parsed.format!, prompt);
+
+      toolLogger.info(
+        { prompt: prompt.slice(0, 50), format: parsed.format, size: parsed.buffer!.length },
+        "Image generated and sent"
       );
-      return JSON.stringify({ error: parsed.error });
+
+      return { success: true, format: parsed.format, description: extracted.content ?? null };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toolLogger.error({ error: errorMessage }, "Failed to generate image");
+      return { error: "Failed to generate image", details: errorMessage };
     }
-
-    await sendImageToChannel(channel, parsed.buffer!, parsed.format!, prompt);
-
-    toolLogger.info(
-      {
-        prompt: prompt.slice(0, 50),
-        format: parsed.format,
-        size: parsed.buffer!.length,
-      },
-      "Image generated and sent",
-    );
-
-    return JSON.stringify({
-      success: true,
-      format: parsed.format,
-      description: extracted.content ?? null,
-    });
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
-    toolLogger.error({ error: errorMessage }, "Failed to generate image");
-    return JSON.stringify({
-      error: "Failed to generate image",
-      details: errorMessage,
-    });
-  }
-}
+  },
+});
