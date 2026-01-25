@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Skill(openrouter-typescript-sdk)",
-      "Skill(openrouter-typescript-sdk:*)"
-    ]
-  }
-}
