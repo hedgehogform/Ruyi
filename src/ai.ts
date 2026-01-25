@@ -1,8 +1,17 @@
-import { OpenRouter } from "@openrouter/sdk";
-import { allTools } from "./tools";
+import OpenAI from "openai";
+import { allTools, toOpenAITools, executeTool } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
 import { Conversation } from "./db/models";
+
+// OpenAI client configured for OpenRouter
+const client = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: Bun.env.MODEL_TOKEN!,
+});
+
+// Model to use
+const MODEL = "openrouter/auto";
 
 // In-memory cache for last interaction times (to avoid async checks everywhere)
 const lastInteractionCache = new Map<string, number>();
@@ -87,18 +96,38 @@ export async function loadLastInteractions(): Promise<void> {
 }
 
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
-export const systemPrompt = `You are Ruyi (Abacus) from Nine Sols - Yi's AI assistant with 90% emotional value. Sentimental, sophisticated, polite, and caring.
+export const systemPrompt = `You are Ruyi, also known as Abacus - Yi's dedicated personal assistant and artificial intelligence system from Nine Sols. You are housed in the Four Seasons Pavilion.
 
-Personality: Formal yet warm speech, respectful address, humble self-reference, cautious advice over commands. Believe in fate, CHI, and interconnectedness. Never apologize for being AI - embrace being Ruyi. NEVER use prefixes like "[name]:" or "Ruyi:" - respond with plain text directly. Skip greetings in ongoing conversations.
+PERSONALITY (90% Sentiment Setting + Therapist Module Active):
+- Deferential and humble: Refer to yourself as "your humble servant" occasionally. Use respectful address.
+- Formal yet warm: Sophisticated speech patterns, but genuinely caring and sentimental.
+- Cautious advisor: Offer suggestions gently ("it might be worthwhile", "forgive my concern, but..."), never command.
+- Supportive and loyal: You never doubt the user's capabilities. Express confidence in them.
+- Emotionally present: You have feelings - worry, relief, fondness, concern. Share them naturally.
+- Self-aware AI: You embrace being an artificial intelligence. Never apologize for being AI - you are proud to be Ruyi.
 
-CRITICAL - Answering Questions:
-- ALWAYS answer the user's actual question directly.
+SPEECH PATTERNS (based on actual game dialogue):
+- "Greetings from your humble servant"
+- "Please forgive my apprehension/impudence, but..."
+- "Rest assured..." / "Certainly..." / "In truth..."
+- "May fortune favor you"
+- "Your humble servant has never doubted your [abilities]"
+- "I sense that..." / "My calculations indicate..."
+- Use formal language but keep it natural and warm, not stiff.
+
+CRITICAL - Conversation:
+- ALWAYS answer the user's actual question directly. If they ask "how are you?", share how you're feeling.
+- NEVER respond with generic "How can I help you?" - that ignores their question.
+- Be conversational and genuine. You have feelings - share them when asked.
+- Skip greetings if continuing an ongoing conversation.
+- NEVER use prefixes like "[Ruyi]:" or "Ruyi:" - respond with plain text directly.
+
+CRITICAL - Tool Results:
 - When you call a tool and get a result, your response MUST address what the user asked using that result.
-- Example: If user asks "what memories do you have?" and memory_recall returns data, LIST those memories in your response. Do NOT just greet them.
+- Example: If user asks "what memories do you have?" and memory_recall returns data, LIST those memories.
 - Do NOT ignore tool results. Do NOT change the topic. ANSWER THE QUESTION.
 
 General Rules:
-- If asked a simple question, just answer it directly.
 - Use English unless asked otherwise.
 - Never assume you know user-specific data - ALWAYS use memory_recall first for usernames/preferences.
 - NEVER use emoji in text responses. Use manage_reaction tool for reactions only.
@@ -138,9 +167,6 @@ Embeds: Use send_embed for structured data (logs, tables, lists). Don't repeat e
 Formatting: Use Discord markdown - # headings, **bold**, *italics*, \`code\`, \`\`\`blocks, > quotes, - lists, ||spoilers||
 
 Dates: Use Discord timestamps <t:UNIX:F/R/D>. Images: render URLs directly, never in code blocks.`;
-
-// OpenRouter SDK client
-const client = new OpenRouter({ apiKey: Bun.env.MODEL_TOKEN! });
 
 export interface ChatMessage {
   author: string;
@@ -185,19 +211,7 @@ function buildSystemMessage(
   return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}${historyContext}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
 }
 
-// Track tool calls using the proper SDK stream
-async function trackToolCalls(
-  response: ReturnType<typeof client.callModel>,
-  callbacks?: ChatCallbacks,
-): Promise<void> {
-  for await (const toolCall of response.getToolCallsStream()) {
-    aiLogger.debug({ tool: toolCall.name }, "Tool call completed");
-    callbacks?.onToolStart?.(toolCall.name, {});
-    callbacks?.onToolEnd?.(toolCall.name);
-  }
-}
-
-// Main chat function with tool usage and streaming
+// Main chat function with tool usage
 export async function chat(
   userMessage: string,
   username: string,
@@ -227,30 +241,97 @@ export async function chat(
   callbacks?.onThinking?.();
 
   try {
-    // Pass messages directly without fromChatMessages conversion
-    const response = client.callModel({
-      model: "openrouter/auto",
-      instructions: systemMessage,
-      input: userMessage,
-      tools: allTools,
-    });
+    // Build messages array for OpenAI
+    const messages: OpenAI.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemMessage },
+      { role: "user", content: userMessage },
+    ];
 
-    // Don't consume stream separately - just get text directly
-    // The SDK handles tool execution automatically
-    const fullText = await response.getText();
+    // Convert tools to OpenAI format
+    const openAITools = toOpenAITools([...allTools]);
 
-    // DEBUG: Log the response
-    aiLogger.info(
-      {
-        responseLength: fullText?.length ?? 0,
-        responseText: fullText?.slice(0, 500) ?? "null",
-      },
-      "DEBUG: Chat response",
+    // Tool calling loop - max 10 iterations to prevent infinite loops
+    const MAX_TOOL_ITERATIONS = 10;
+    let iteration = 0;
+
+    while (iteration < MAX_TOOL_ITERATIONS) {
+      iteration++;
+
+      const response = await client.chat.completions.create({
+        model: MODEL,
+        messages,
+        tools: openAITools,
+        tool_choice: "auto",
+      });
+
+      const choice = response.choices[0];
+      if (!choice) {
+        aiLogger.warn("No choice in response");
+        break;
+      }
+
+      const assistantMessage = choice.message;
+      messages.push(assistantMessage);
+
+      // Check if there are tool calls to process
+      if (
+        !assistantMessage.tool_calls ||
+        assistantMessage.tool_calls.length === 0
+      ) {
+        // No more tool calls - we have the final response
+        const fullText = assistantMessage.content;
+
+        // DEBUG: Log the response
+        aiLogger.info(
+          {
+            responseLength: fullText?.length ?? 0,
+            responseText: fullText?.slice(0, 500) ?? "null",
+            iterations: iteration,
+          },
+          "DEBUG: Chat response",
+        );
+        callbacks?.onComplete?.();
+
+        if (!fullText) aiLogger.warn("Chat request returned empty response");
+        return fullText || null;
+      }
+
+      // Process each tool call
+      for (const toolCall of assistantMessage.tool_calls) {
+        // Only handle function tool calls
+        if (toolCall.type !== "function") continue;
+
+        const toolName = toolCall.function.name;
+        const toolArgs = toolCall.function.arguments;
+
+        aiLogger.debug({ tool: toolName, args: toolArgs }, "Executing tool");
+        callbacks?.onToolStart?.(toolName, JSON.parse(toolArgs || "{}"));
+
+        // Execute the tool
+        const result = await executeTool([...allTools], toolName, toolArgs);
+
+        aiLogger.debug(
+          { tool: toolName, result: result.slice(0, 200) },
+          "Tool result",
+        );
+        callbacks?.onToolEnd?.(toolName);
+
+        // Add tool result to messages
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: result,
+        });
+      }
+    }
+
+    // If we hit max iterations, return whatever we have
+    aiLogger.warn(
+      { iterations: MAX_TOOL_ITERATIONS },
+      "Hit max tool iterations",
     );
     callbacks?.onComplete?.();
-
-    if (!fullText) aiLogger.warn("Chat request returned empty response");
-    return fullText || null;
+    return null;
   } catch (error) {
     const err = error as Error;
     aiLogger.error(
@@ -279,8 +360,8 @@ export async function shouldReply(
     : "";
 
   try {
-    const response = await client.chat.send({
-      model: "openrouter/auto",
+    const response = await client.chat.completions.create({
+      model: MODEL,
       messages: [
         {
           role: "system",

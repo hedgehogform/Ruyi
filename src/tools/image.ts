@@ -1,4 +1,4 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";

@@ -1,16 +1,27 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
-import { getToolContext, resolveTargetMessage, formatError } from "../utils/types";
+import {
+  getToolContext,
+  resolveTargetMessage,
+  formatError,
+} from "../utils/types";
 
 // Find a reaction by emoji (handles unicode and custom emojis)
-function findReaction(message: Message, emoji: string): MessageReaction | undefined {
+function findReaction(
+  message: Message,
+  emoji: string,
+): MessageReaction | undefined {
   return message.reactions.cache.find((r) => {
     const emojiStr = r.emoji.toString();
     const emojiName = r.emoji.name;
     const emojiId = r.emoji.id;
-    return emojiStr === emoji || emojiName === emoji || (emojiId && emoji.includes(emojiId));
+    return (
+      emojiStr === emoji ||
+      emojiName === emoji ||
+      (emojiId && emoji.includes(emojiId))
+    );
   });
 }
 
@@ -19,17 +30,19 @@ export const reactionTool = tool({
   description:
     "Add or remove emoji reactions on messages. Can target the current message, the message the user replied to, or any message by ID.",
   inputSchema: z.object({
-    action: z.enum(["add", "remove"]).describe("Whether to add or remove the reaction."),
+    action: z
+      .enum(["add", "remove"])
+      .describe("Whether to add or remove the reaction."),
     emoji: z
       .string()
       .describe(
-        "The emoji to react with. Can be a unicode emoji (👍, ❤️, 🔥, 😊, 🎉, etc.) or a custom emoji in the format <:name:id> or <a:name:id> for animated."
+        "The emoji to react with. Can be a unicode emoji (👍, ❤️, 🔥, 😊, 🎉, etc.) or a custom emoji in the format <:name:id> or <a:name:id> for animated.",
       ),
     message_id: z
       .string()
       .nullable()
       .describe(
-        'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use search_messages to find IDs).'
+        'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use search_messages to find IDs).',
       ),
   }),
   execute: async ({ action, emoji, message_id }) => {
@@ -44,7 +57,10 @@ export const reactionTool = tool({
     try {
       if (action === "add") {
         await targetMessage.react(emoji);
-        toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Added reaction");
+        toolLogger.info(
+          { emoji, messageId: targetMessage.id, action },
+          "Added reaction",
+        );
         return {
           success: true,
           action: "added",
@@ -78,7 +94,10 @@ export const reactionTool = tool({
       }
 
       await reaction.users.remove(botUserId);
-      toolLogger.info({ emoji, messageId: targetMessage.id, action }, "Removed reaction");
+      toolLogger.info(
+        { emoji, messageId: targetMessage.id, action },
+        "Removed reaction",
+      );
       return {
         success: true,
         action: "removed",
@@ -88,7 +107,10 @@ export const reactionTool = tool({
       };
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage, emoji, action, message_id }, "Failed to manage reaction");
+      toolLogger.error(
+        { error: errorMessage, emoji, action, message_id },
+        "Failed to manage reaction",
+      );
       return { error: "Failed to manage reaction", details: errorMessage };
     }
   },

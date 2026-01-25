@@ -1,4 +1,4 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import { EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
@@ -89,7 +89,8 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(config.color);
 
   if (config.title) embed.setTitle(config.title.slice(0, 256));
-  if (config.description) embed.setDescription(config.description.slice(0, MAX_DESCRIPTION));
+  if (config.description)
+    embed.setDescription(config.description.slice(0, MAX_DESCRIPTION));
 
   if (config.fields && config.fields.length > 0) {
     for (const field of config.fields.slice(0, MAX_FIELDS_PER_EMBED)) {
@@ -101,14 +102,18 @@ function buildEmbed(config: EmbedConfig): EmbedBuilder {
     }
   }
 
-  if (config.footer) embed.setFooter({ text: config.footer.slice(0, MAX_FOOTER) });
+  if (config.footer)
+    embed.setFooter({ text: config.footer.slice(0, MAX_FOOTER) });
   if (config.thumbnail) embed.setThumbnail(config.thumbnail);
   if (config.showTimestamp) embed.setTimestamp();
 
   return embed;
 }
 
-function getContinuationTitle(title: string | null, isFirst: boolean): string | null {
+function getContinuationTitle(
+  title: string | null,
+  isFirst: boolean,
+): string | null {
   if (isFirst) return title;
   return title ? `${title} (cont.)` : null;
 }
@@ -119,11 +124,14 @@ function buildMultipleEmbeds(
   description: string | null,
   fields: EmbedField[] | null,
   footer: string | null,
-  thumbnail: string | null
+  thumbnail: string | null,
 ): EmbedBuilder[] {
   const embeds: EmbedBuilder[] = [];
-  const descriptionChunks: (string | null)[] = description ? chunkDescription(description) : [];
-  const fieldChunks: EmbedField[][] = fields && fields.length > 0 ? chunkFields(fields) : [];
+  const descriptionChunks: (string | null)[] = description
+    ? chunkDescription(description)
+    : [];
+  const fieldChunks: EmbedField[][] =
+    fields && fields.length > 0 ? chunkFields(fields) : [];
   const totalParts = Math.max(descriptionChunks.length, fieldChunks.length, 1);
 
   let partIndex = 0;
@@ -145,7 +153,7 @@ function buildMultipleEmbeds(
         footer: isLast ? footer : null,
         thumbnail: isFirst ? thumbnail : null,
         showTimestamp: isLast,
-      })
+      }),
     );
     partIndex++;
   }
@@ -162,7 +170,7 @@ function buildMultipleEmbeds(
         footer: isLast ? footer : null,
         thumbnail: null,
         showTimestamp: isLast,
-      })
+      }),
     );
     partIndex++;
   }
@@ -170,9 +178,13 @@ function buildMultipleEmbeds(
   return embeds;
 }
 
-function needsMultipleEmbeds(fields: EmbedField[] | null, description: string | null): boolean {
+function needsMultipleEmbeds(
+  fields: EmbedField[] | null,
+  description: string | null,
+): boolean {
   const tooManyFields = fields !== null && fields.length > MAX_FIELDS_PER_EMBED;
-  const descriptionTooLong = description !== null && description.length > MAX_DESCRIPTION;
+  const descriptionTooLong =
+    description !== null && description.length > MAX_DESCRIPTION;
   return tooManyFields || descriptionTooLong;
 }
 
@@ -182,7 +194,10 @@ export const embedTool = tool({
     "Send a beautifully formatted Discord embed message. Use this for tables, lists, structured data, audit logs, search results, or any content that benefits from rich formatting.",
   inputSchema: z.object({
     title: z.string().nullable().describe("The embed title."),
-    description: z.string().nullable().describe("Main embed description. Supports Discord markdown."),
+    description: z
+      .string()
+      .nullable()
+      .describe("Main embed description. Supports Discord markdown."),
     color: z.string().nullable().describe("Embed color as hex or color name."),
     fields: z
       .array(
@@ -190,12 +205,15 @@ export const embedTool = tool({
           name: z.string(),
           value: z.string(),
           inline: z.boolean().optional(),
-        })
+        }),
       )
       .nullable()
       .describe("Array of field objects for structured data."),
     footer: z.string().nullable().describe("Small text at the bottom."),
-    thumbnail: z.string().nullable().describe("URL of a small image in top-right corner."),
+    thumbnail: z
+      .string()
+      .nullable()
+      .describe("URL of a small image in top-right corner."),
   }),
   execute: async ({ title, description, color, fields, footer, thumbnail }) => {
     const ctx = getToolContext();
@@ -215,7 +233,14 @@ export const embedTool = tool({
       let embeds: EmbedBuilder[];
 
       if (needsMultipleEmbeds(fields, description)) {
-        embeds = buildMultipleEmbeds(parsedColor, title, description, fields, footer, thumbnail);
+        embeds = buildMultipleEmbeds(
+          parsedColor,
+          title,
+          description,
+          fields,
+          footer,
+          thumbnail,
+        );
       } else {
         embeds = [
           buildEmbed({
@@ -236,7 +261,7 @@ export const embedTool = tool({
 
       toolLogger.info(
         { title, fieldCount: fields?.length ?? 0, embedCount: embeds.length },
-        "Sent embed message(s)"
+        "Sent embed message(s)",
       );
 
       return {
@@ -246,7 +271,8 @@ export const embedTool = tool({
         embedCount: embeds.length,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Failed to send embed");
       return { error: "Failed to send embed", details: errorMessage };
     }

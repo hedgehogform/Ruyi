@@ -1,6 +1,14 @@
 // Re-export context management
 export { setToolContext } from "../utils/types";
 
+// Re-export tool helpers
+export { toOpenAITools, executeTool } from "../utils/openai-tools";
+export type {
+  ToolDefinition,
+  OpenAIFunctionTool,
+  RuntimeTool,
+} from "../utils/openai-tools";
+
 // Re-export all tools
 export { calculatorTool } from "./calc";
 export { channelInfoTool } from "./channel";
@@ -13,7 +21,12 @@ export { searchMessagesTool, deleteMessagesTool } from "./message";
 export { embedTool } from "./embed";
 export { generateImageTool } from "./image";
 export { fetchTool } from "./web";
-export { memoryStoreTool, memoryRecallTool, searchMemoryTool, searchConversationTool } from "./memory";
+export {
+  memoryStoreTool,
+  memoryRecallTool,
+  searchMemoryTool,
+  searchConversationTool,
+} from "./memory";
 export { auditLogTool } from "./audit";
 export { lastfmTool } from "./lastfm";
 
@@ -29,11 +42,16 @@ import { searchMessagesTool, deleteMessagesTool } from "./message";
 import { embedTool } from "./embed";
 import { generateImageTool } from "./image";
 import { fetchTool } from "./web";
-import { memoryStoreTool, memoryRecallTool, searchMemoryTool, searchConversationTool } from "./memory";
+import {
+  memoryStoreTool,
+  memoryRecallTool,
+  searchMemoryTool,
+  searchConversationTool,
+} from "./memory";
 import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
 
-// Export all tools as an array for use with OpenRouter SDK
+// Export all tools as an array for use with OpenAI function calling
 export const allTools = [
   calculatorTool,
   channelInfoTool,

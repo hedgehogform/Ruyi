@@ -1,4 +1,4 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import {
@@ -17,21 +17,34 @@ export const lastfmTool = tool({
     "Query Last.fm for music listening data. Can get recent scrobbles, now playing, user profile, and top artists/tracks/albums.",
   inputSchema: z.object({
     action: z
-      .enum(["now_playing", "recent_tracks", "user_info", "top_artists", "top_tracks", "top_albums"])
+      .enum([
+        "now_playing",
+        "recent_tracks",
+        "user_info",
+        "top_artists",
+        "top_tracks",
+        "top_albums",
+      ])
       .describe("The action to perform."),
     username: z.string().describe("The Last.fm username to query."),
     period: z
       .enum(["overall", "7day", "1month", "3month", "6month", "12month"])
       .nullable()
       .describe("Time period for top charts."),
-    limit: z.number().nullable().describe("Number of results (default: 10, max: 50)."),
+    limit: z
+      .number()
+      .nullable()
+      .describe("Number of results (default: 10, max: 50)."),
   }),
   execute: async ({ action, username, period, limit }) => {
     try {
       const effectiveLimit = Math.min(limit ?? 10, 50);
       const effectivePeriod: Period = period ?? "overall";
 
-      toolLogger.info({ action, username, period: effectivePeriod, limit: effectiveLimit }, "Last.fm query");
+      toolLogger.info(
+        { action, username, period: effectivePeriod, limit: effectiveLimit },
+        "Last.fm query",
+      );
 
       switch (action) {
         case "now_playing": {
@@ -53,17 +66,29 @@ export const lastfmTool = tool({
         }
 
         case "top_artists": {
-          const result = await getTopArtists(username, effectivePeriod, effectiveLimit);
+          const result = await getTopArtists(
+            username,
+            effectivePeriod,
+            effectiveLimit,
+          );
           return { success: true, ...result };
         }
 
         case "top_tracks": {
-          const result = await getTopTracks(username, effectivePeriod, effectiveLimit);
+          const result = await getTopTracks(
+            username,
+            effectivePeriod,
+            effectiveLimit,
+          );
           return { success: true, ...result };
         }
 
         case "top_albums": {
-          const result = await getTopAlbums(username, effectivePeriod, effectiveLimit);
+          const result = await getTopAlbums(
+            username,
+            effectivePeriod,
+            effectiveLimit,
+          );
           return { success: true, ...result };
         }
 
@@ -71,8 +96,12 @@ export const lastfmTool = tool({
           return { error: `Unknown action: ${action}` };
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toolLogger.error({ error: errorMessage, action, username }, "Last.fm query failed");
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      toolLogger.error(
+        { error: errorMessage, action, username },
+        "Last.fm query failed",
+      );
       return { error: errorMessage };
     }
   },

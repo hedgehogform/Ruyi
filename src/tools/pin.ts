@@ -1,4 +1,4 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { resolveTargetMessage, formatError } from "../utils/types";
@@ -8,12 +8,14 @@ export const pinTool = tool({
   description:
     "Pin or unpin messages in the current channel. Use search_messages first to find the message ID if the user references a specific message.",
   inputSchema: z.object({
-    action: z.enum(["pin", "unpin"]).describe("Whether to pin or unpin the message."),
+    action: z
+      .enum(["pin", "unpin"])
+      .describe("Whether to pin or unpin the message."),
     message_id: z
       .string()
       .nullable()
       .describe(
-        'The message ID to pin/unpin. Use "replied" for the message the user replied to, null for the user\'s current message, or an actual message ID from search_messages.'
+        'The message ID to pin/unpin. Use "replied" for the message the user replied to, null for the user\'s current message, or an actual message ID from search_messages.',
       ),
   }),
   execute: async ({ action, message_id }) => {
@@ -27,7 +29,10 @@ export const pinTool = tool({
     try {
       if (action === "pin") {
         await targetMessage.pin();
-        toolLogger.info({ messageId: targetMessage.id, action }, "Pinned message");
+        toolLogger.info(
+          { messageId: targetMessage.id, action },
+          "Pinned message",
+        );
         return {
           success: true,
           action: "pinned",
@@ -39,7 +44,10 @@ export const pinTool = tool({
         };
       } else {
         await targetMessage.unpin();
-        toolLogger.info({ messageId: targetMessage.id, action }, "Unpinned message");
+        toolLogger.info(
+          { messageId: targetMessage.id, action },
+          "Unpinned message",
+        );
         return {
           success: true,
           action: "unpinned",
@@ -49,7 +57,10 @@ export const pinTool = tool({
       }
     } catch (error) {
       const errorMessage = formatError(error);
-      toolLogger.error({ error: errorMessage, action, message_id }, "Failed to manage pin");
+      toolLogger.error(
+        { error: errorMessage, action, message_id },
+        "Failed to manage pin",
+      );
       return { error: "Failed to manage pin", details: errorMessage };
     }
   },

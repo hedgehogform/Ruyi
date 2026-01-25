@@ -1,4 +1,4 @@
-import { tool } from "@openrouter/sdk";
+import { tool } from "../utils/openai-tools";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
