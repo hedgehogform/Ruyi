@@ -29,6 +29,125 @@ async function findMember(
   );
 }
 
+// Extracted action handlers to reduce complexity
+async function handleCreateRole(
+  guild: Guild,
+  roleName: string,
+  color: string | null,
+) {
+  if (findRole(guild, roleName)) {
+    return { error: `Role "${roleName}" already exists` };
+  }
+  const newRole = await guild.roles.create({
+    name: roleName,
+    color: parseColor(color),
+    reason: "Created by Ruyi bot",
+  });
+  toolLogger.info(
+    { role: newRole.name, color: newRole.hexColor },
+    "Created role",
+  );
+  return {
+    success: true,
+    action: "created",
+    role: { name: newRole.name, color: newRole.hexColor, id: newRole.id },
+  };
+}
+
+async function handleEditRole(
+  guild: Guild,
+  roleName: string,
+  newName: string | null,
+  color: string | null,
+) {
+  const role = findRole(guild, roleName);
+  if (!role) {
+    return { error: `Role "${roleName}" not found` };
+  }
+  if (!newName && !color) {
+    return { error: "No changes specified (provide new_name or color)" };
+  }
+  await role.edit({
+    name: newName ?? undefined,
+    color: parseColor(color),
+    reason: "Edited by Ruyi bot",
+  });
+  toolLogger.info({ role: role.name, newName, color }, "Edited role");
+  return {
+    success: true,
+    action: "edited",
+    role: { name: role.name, color: role.hexColor, id: role.id },
+  };
+}
+
+async function handleAssignRole(
+  guild: Guild,
+  roleName: string,
+  username: string | null,
+) {
+  if (!username) {
+    return { error: "Username required for assign action" };
+  }
+  const role = findRole(guild, roleName);
+  if (!role) {
+    return { error: `Role "${roleName}" not found` };
+  }
+  const member = await findMember(guild, username);
+  if (!member) {
+    return { error: `User "${username}" not found` };
+  }
+  if (member.roles.cache.has(role.id)) {
+    return {
+      error: `${member.user.username} already has the "${role.name}" role`,
+    };
+  }
+  await member.roles.add(role, "Assigned by Ruyi bot");
+  toolLogger.info(
+    { role: role.name, user: member.user.username },
+    "Assigned role",
+  );
+  return {
+    success: true,
+    action: "assigned",
+    role: { name: role.name, color: role.hexColor },
+    user: member.user.username,
+  };
+}
+
+async function handleRemoveRole(
+  guild: Guild,
+  roleName: string,
+  username: string | null,
+) {
+  if (!username) {
+    return { error: "Username required for remove action" };
+  }
+  const role = findRole(guild, roleName);
+  if (!role) {
+    return { error: `Role "${roleName}" not found` };
+  }
+  const member = await findMember(guild, username);
+  if (!member) {
+    return { error: `User "${username}" not found` };
+  }
+  if (!member.roles.cache.has(role.id)) {
+    return {
+      error: `${member.user.username} doesn't have the "${role.name}" role`,
+    };
+  }
+  await member.roles.remove(role, "Removed by Ruyi bot");
+  toolLogger.info(
+    { role: role.name, user: member.user.username },
+    "Removed role",
+  );
+  return {
+    success: true,
+    action: "removed",
+    role: { name: role.name, color: role.hexColor },
+    user: member.user.username,
+  };
+}
+
 export const manageRoleTool = tool({
   name: "manage_role",
   description:
@@ -73,113 +192,14 @@ export const manageRoleTool = tool({
 
     try {
       switch (action) {
-        case "create": {
-          if (findRole(guild, role_name)) {
-            return { error: `Role "${role_name}" already exists` };
-          }
-          const newRole = await guild.roles.create({
-            name: role_name,
-            color: parseColor(color),
-            reason: "Created by Ruyi bot",
-          });
-          toolLogger.info(
-            { role: newRole.name, color: newRole.hexColor },
-            "Created role",
-          );
-          return {
-            success: true,
-            action: "created",
-            role: {
-              name: newRole.name,
-              color: newRole.hexColor,
-              id: newRole.id,
-            },
-          };
-        }
-
-        case "edit": {
-          const role = findRole(guild, role_name);
-          if (!role) {
-            return { error: `Role "${role_name}" not found` };
-          }
-          if (!new_name && !color) {
-            return {
-              error: "No changes specified (provide new_name or color)",
-            };
-          }
-          await role.edit({
-            name: new_name ?? undefined,
-            color: parseColor(color),
-            reason: "Edited by Ruyi bot",
-          });
-          toolLogger.info({ role: role.name, new_name, color }, "Edited role");
-          return {
-            success: true,
-            action: "edited",
-            role: { name: role.name, color: role.hexColor, id: role.id },
-          };
-        }
-
-        case "assign": {
-          if (!username) {
-            return { error: "Username required for assign action" };
-          }
-          const role = findRole(guild, role_name);
-          if (!role) {
-            return { error: `Role "${role_name}" not found` };
-          }
-          const member = await findMember(guild, username);
-          if (!member) {
-            return { error: `User "${username}" not found` };
-          }
-          if (member.roles.cache.has(role.id)) {
-            return {
-              error: `${member.user.username} already has the "${role.name}" role`,
-            };
-          }
-          await member.roles.add(role, "Assigned by Ruyi bot");
-          toolLogger.info(
-            { role: role.name, user: member.user.username },
-            "Assigned role",
-          );
-          return {
-            success: true,
-            action: "assigned",
-            role: { name: role.name, color: role.hexColor },
-            user: member.user.username,
-          };
-        }
-
-        case "remove": {
-          if (!username) {
-            return { error: "Username required for remove action" };
-          }
-          const role = findRole(guild, role_name);
-          if (!role) {
-            return { error: `Role "${role_name}" not found` };
-          }
-          const member = await findMember(guild, username);
-          if (!member) {
-            return { error: `User "${username}" not found` };
-          }
-          if (!member.roles.cache.has(role.id)) {
-            return {
-              error: `${member.user.username} doesn't have the "${role.name}" role`,
-            };
-          }
-          await member.roles.remove(role, "Removed by Ruyi bot");
-          toolLogger.info(
-            { role: role.name, user: member.user.username },
-            "Removed role",
-          );
-          return {
-            success: true,
-            action: "removed",
-            role: { name: role.name, color: role.hexColor },
-            user: member.user.username,
-          };
-        }
-
+        case "create":
+          return await handleCreateRole(guild, role_name, color);
+        case "edit":
+          return await handleEditRole(guild, role_name, new_name, color);
+        case "assign":
+          return await handleAssignRole(guild, role_name, username);
+        case "remove":
+          return await handleRemoveRole(guild, role_name, username);
         default:
           return { error: `Unknown action: ${action}` };
       }

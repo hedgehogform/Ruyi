@@ -15,6 +15,129 @@ function truncateValue(value: string, maxLength = 500): string {
   return value.slice(0, maxLength - 3) + "...";
 }
 
+// Extracted action handlers for memoryStoreTool
+async function handleSaveMemory(
+  key: string | null,
+  value: string | null,
+  scope: "global" | "user",
+  username: string | null,
+) {
+  if (!key || !value) {
+    return { error: "Key and value are required for save" };
+  }
+  if (scope === "user" && !username) {
+    return { error: "Username required for user-scoped memories" };
+  }
+
+  const truncatedValue = truncateValue(value);
+  const limit = scope === "global" ? 50 : 30;
+  const query =
+    scope === "global" ? { scope: "global" } : { scope: "user", username };
+  const count = await Memory.countDocuments(query);
+
+  if (count >= limit) {
+    const oldest = await Memory.findOne(query).sort({ updatedAt: 1 });
+    if (oldest) await oldest.deleteOne();
+  }
+
+  await Memory.updateOne(
+    { key, scope, username: scope === "global" ? null : username },
+    {
+      key,
+      value: truncatedValue,
+      scope,
+      username: scope === "global" ? null : username,
+      createdBy: username ?? "unknown",
+    },
+    { upsert: true },
+  );
+
+  return {
+    success: true,
+    message: `Remembered "${key}" for ${scope === "global" ? "everyone" : username}`,
+  };
+}
+
+async function handleGetMemory(
+  key: string | null,
+  scope: "global" | "user",
+  username: string | null,
+) {
+  if (!key) {
+    return { error: "Key is required for get" };
+  }
+  const query =
+    scope === "global"
+      ? { key, scope: "global" }
+      : { key, scope: "user", username };
+  const item = await Memory.findOne(query);
+
+  if (!item) {
+    return { found: false, message: `No memory found for "${key}"` };
+  }
+
+  return {
+    found: true,
+    key: item.key,
+    value: item.value,
+    createdBy: item.createdBy,
+    createdAt: item.createdAt,
+  };
+}
+
+async function handleDeleteMemory(
+  key: string | null,
+  scope: "global" | "user",
+  username: string | null,
+) {
+  if (!key) {
+    return { error: "Key is required for delete" };
+  }
+  const query =
+    scope === "global"
+      ? { key, scope: "global" }
+      : { key, scope: "user", username };
+  const result = await Memory.deleteOne(query);
+
+  if (result.deletedCount > 0) {
+    return { success: true, message: `Forgot "${key}"` };
+  }
+  return { success: false, message: `No memory found for "${key}"` };
+}
+
+async function handleListMemories(username: string | null) {
+  const memories: {
+    scope: string;
+    key: string;
+    value: string;
+    createdBy: string;
+  }[] = [];
+
+  const globalMemories = await Memory.find({ scope: "global" });
+  for (const m of globalMemories) {
+    memories.push({
+      scope: "global",
+      key: m.key,
+      value: m.value,
+      createdBy: m.createdBy,
+    });
+  }
+
+  if (username) {
+    const userMemories = await Memory.find({ scope: "user", username });
+    for (const m of userMemories) {
+      memories.push({
+        scope: "user",
+        key: m.key,
+        value: m.value,
+        createdBy: m.createdBy,
+      });
+    }
+  }
+
+  return { count: memories.length, memories };
+}
+
 export const memoryStoreTool = tool({
   name: "memory_store",
   description:
@@ -40,123 +163,19 @@ export const memoryStoreTool = tool({
       ),
   }),
   execute: async ({ action, key, value, scope }) => {
-    // Always get username from context - don't trust model parameter
     const username = getContextUsername();
     toolLogger.info({ action, key, scope, username }, "Memory store operation");
 
     try {
       switch (action) {
-        case "save": {
-          if (!key || !value) {
-            return { error: "Key and value are required for save" };
-          }
-          if (scope === "user" && !username) {
-            return { error: "Username required for user-scoped memories" };
-          }
-
-          const truncatedValue = truncateValue(value);
-          const limit = scope === "global" ? 50 : 30;
-          const query =
-            scope === "global"
-              ? { scope: "global" }
-              : { scope: "user", username };
-          const count = await Memory.countDocuments(query);
-
-          if (count >= limit) {
-            const oldest = await Memory.findOne(query).sort({ updatedAt: 1 });
-            if (oldest) await oldest.deleteOne();
-          }
-
-          await Memory.updateOne(
-            { key, scope, username: scope === "global" ? null : username },
-            {
-              key,
-              value: truncatedValue,
-              scope,
-              username: scope === "global" ? null : username,
-              createdBy: username ?? "unknown",
-            },
-            { upsert: true },
-          );
-
-          return {
-            success: true,
-            message: `Remembered "${key}" for ${scope === "global" ? "everyone" : username}`,
-          };
-        }
-
-        case "get": {
-          if (!key) {
-            return { error: "Key is required for get" };
-          }
-          const query =
-            scope === "global"
-              ? { key, scope: "global" }
-              : { key, scope: "user", username };
-          const item = await Memory.findOne(query);
-
-          if (!item) {
-            return { found: false, message: `No memory found for "${key}"` };
-          }
-
-          return {
-            found: true,
-            key: item.key,
-            value: item.value,
-            createdBy: item.createdBy,
-            createdAt: item.createdAt,
-          };
-        }
-
-        case "delete": {
-          if (!key) {
-            return { error: "Key is required for delete" };
-          }
-          const query =
-            scope === "global"
-              ? { key, scope: "global" }
-              : { key, scope: "user", username };
-          const result = await Memory.deleteOne(query);
-
-          if (result.deletedCount > 0) {
-            return { success: true, message: `Forgot "${key}"` };
-          }
-          return { success: false, message: `No memory found for "${key}"` };
-        }
-
-        case "list": {
-          const memories: {
-            scope: string;
-            key: string;
-            value: string;
-            createdBy: string;
-          }[] = [];
-
-          const globalMemories = await Memory.find({ scope: "global" });
-          for (const m of globalMemories) {
-            memories.push({
-              scope: "global",
-              key: m.key,
-              value: m.value,
-              createdBy: m.createdBy,
-            });
-          }
-
-          if (username) {
-            const userMemories = await Memory.find({ scope: "user", username });
-            for (const m of userMemories) {
-              memories.push({
-                scope: "user",
-                key: m.key,
-                value: m.value,
-                createdBy: m.createdBy,
-              });
-            }
-          }
-
-          return { count: memories.length, memories };
-        }
-
+        case "save":
+          return await handleSaveMemory(key, value, scope, username);
+        case "get":
+          return await handleGetMemory(key, scope, username);
+        case "delete":
+          return await handleDeleteMemory(key, scope, username);
+        case "list":
+          return await handleListMemories(username);
         default:
           return { error: `Unknown action: ${action}` };
       }
@@ -172,6 +191,34 @@ export const memoryStoreTool = tool({
   },
 });
 
+// Helper to collect memories with length limit
+function collectMemoryLines(
+  memories: Array<{ key: string; value: string }>,
+  header: string,
+  currentLength: number,
+  maxLength: number,
+): { lines: string[]; newLength: number } {
+  const lines: string[] = [];
+  let length = currentLength;
+
+  if (memories.length === 0) {
+    return { lines, newLength: length };
+  }
+
+  lines.push(header);
+  for (const m of memories) {
+    const line = `• ${m.key}: ${m.value}`;
+    if (length + line.length > maxLength) {
+      lines.push("... (truncated)");
+      break;
+    }
+    lines.push(line);
+    length += line.length;
+  }
+
+  return { lines, newLength: length };
+}
+
 export const memoryRecallTool = tool({
   name: "memory_recall",
   description:
@@ -180,7 +227,6 @@ export const memoryRecallTool = tool({
     include_global: z.boolean().describe("Whether to include global memories."),
   }),
   execute: async ({ include_global }) => {
-    // Always get username from context
     const username = getContextUsername();
     toolLogger.info({ username, include_global }, "Recalling memories");
 
@@ -190,34 +236,25 @@ export const memoryRecallTool = tool({
 
     if (include_global) {
       const globalMemories = await Memory.find({ scope: "global" });
-      if (globalMemories.length > 0) {
-        allLines.push("=== Global Memories ===");
-        for (const m of globalMemories) {
-          const line = `• ${m.key}: ${m.value}`;
-          if (currentLength + line.length > maxTotalLength) {
-            allLines.push("... (truncated)");
-            break;
-          }
-          allLines.push(line);
-          currentLength += line.length;
-        }
-      }
+      const { lines, newLength } = collectMemoryLines(
+        globalMemories,
+        "=== Global Memories ===",
+        currentLength,
+        maxTotalLength,
+      );
+      allLines.push(...lines);
+      currentLength = newLength;
     }
 
     if (username) {
       const userMemories = await Memory.find({ scope: "user", username });
-      if (userMemories.length > 0) {
-        allLines.push(`=== Memories about ${username} ===`);
-        for (const m of userMemories) {
-          const line = `• ${m.key}: ${m.value}`;
-          if (currentLength + line.length > maxTotalLength) {
-            allLines.push("... (truncated)");
-            break;
-          }
-          allLines.push(line);
-          currentLength += line.length;
-        }
-      }
+      const { lines } = collectMemoryLines(
+        userMemories,
+        `=== Memories about ${username} ===`,
+        currentLength,
+        maxTotalLength,
+      );
+      allLines.push(...lines);
     }
 
     if (allLines.length === 0) {
