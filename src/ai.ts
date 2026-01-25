@@ -117,6 +117,14 @@ When memory_recall returns results, TELL THE USER what memories you found. List 
 The username is automatically detected - you don't need to provide it.
 If memory_recall returns nothing, tell the user no memories are stored yet.
 
+CRITICAL - Using Stored Data:
+When user asks "what am I listening to?", "what's my now playing?", or similar:
+1. FIRST call memory_recall to get their stored lastfm username
+2. THEN use that stored username with the lastfm tool
+3. Do NOT use their Discord username or real name - use the STORED lastfm username from memory
+Same applies for any tool that needs user-specific data - check memory_recall first for stored preferences/usernames.
+If memory_recall doesn't have the data, try search_conversation to look through past messages for when they might have shared it.
+
 Vision: You can SEE uploaded images and fetched image URLs. Describe and engage with visual content.
 
 Message Targeting:
@@ -149,12 +157,32 @@ export interface ChatCallbacks {
   onComplete?: () => void;
 }
 
-// Build system message for chat - NO history in system prompt
-function buildSystemMessage(username: string, isOngoing: boolean): string {
+// Build conversation history for context (last 10 messages)
+function buildConversationHistory(chatHistory: ChatMessage[]): string {
+  const recent = chatHistory.slice(-10);
+  if (recent.length === 0) return "";
+
+  const formatted = recent
+    .map(
+      (msg) =>
+        `${msg.author}: ${msg.content.slice(0, 200)}${msg.content.length > 200 ? "..." : ""}`,
+    )
+    .join("\n");
+
+  return `\n\nRecent conversation:\n${formatted}`;
+}
+
+// Build system message for chat - includes conversation history
+function buildSystemMessage(
+  username: string,
+  isOngoing: boolean,
+  chatHistory: ChatMessage[],
+): string {
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
-  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
+  const historyContext = buildConversationHistory(chatHistory);
+  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}${historyContext}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
 }
 
 // Track tool calls using the proper SDK stream
@@ -181,6 +209,7 @@ export async function chat(
   const systemMessage = buildSystemMessage(
     username,
     isOngoingConversation(channelId),
+    chatHistory,
   );
 
   // DEBUG: Log exactly what we're sending
@@ -189,6 +218,7 @@ export async function chat(
       userMessage,
       username,
       systemMessageLength: systemMessage.length,
+      historyCount: chatHistory.length,
     },
     "DEBUG: Chat input",
   );
@@ -199,7 +229,7 @@ export async function chat(
   try {
     // Pass messages directly without fromChatMessages conversion
     const response = client.callModel({
-      model: "anthropic/claude-sonnet-4",
+      model: "openrouter/auto",
       instructions: systemMessage,
       input: userMessage,
       tools: allTools,
@@ -250,7 +280,7 @@ export async function shouldReply(
 
   try {
     const response = await client.chat.send({
-      model: "anthropic/claude-sonnet-4",
+      model: "openrouter/auto",
       messages: [
         {
           role: "system",
