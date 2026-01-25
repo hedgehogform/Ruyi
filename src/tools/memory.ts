@@ -2,6 +2,13 @@ import { tool } from "@openrouter/sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
+import { getToolContext } from "../utils/types";
+
+// Get the actual Discord username from context - don't trust model's username parameter
+function getContextUsername(): string | null {
+  const ctx = getToolContext();
+  return ctx.message?.author.username ?? null;
+}
 
 function truncateValue(value: string, maxLength = 500): string {
   if (value.length <= maxLength) return value;
@@ -11,15 +18,30 @@ function truncateValue(value: string, maxLength = 500): string {
 export const memoryStoreTool = tool({
   name: "memory_store",
   description:
-    "Store information to remember for later. Use this when a user asks you to remember something, save a note, or store information.",
+    "Store information to remember for later. Use this when a user asks you to remember something, save a note, or store information. The username is automatically detected from the message context.",
   inputSchema: z.object({
-    action: z.enum(["save", "get", "delete", "list"]).describe("The action to perform."),
-    key: z.string().nullable().describe("A short identifier/name for the memory."),
-    value: z.string().nullable().describe("The information to remember."),
-    scope: z.enum(["global", "user"]).describe("Where to store the memory."),
-    username: z.string().nullable().describe("The username for user-scoped memories."),
+    action: z
+      .enum(["save", "get", "delete", "list"])
+      .describe("The action to perform."),
+    key: z
+      .string()
+      .nullable()
+      .describe(
+        "A short identifier/name for the memory (e.g. 'name', 'lastfm_username').",
+      ),
+    value: z
+      .string()
+      .nullable()
+      .describe("The information to remember (e.g. 'Alexander', 'shadow123')."),
+    scope: z
+      .enum(["global", "user"])
+      .describe(
+        "Where to store the memory. Use 'user' for personal info about the current user.",
+      ),
   }),
-  execute: async ({ action, key, value, scope, username }) => {
+  execute: async ({ action, key, value, scope }) => {
+    // Always get username from context - don't trust model parameter
+    const username = getContextUsername();
     toolLogger.info({ action, key, scope, username }, "Memory store operation");
 
     try {
@@ -34,7 +56,10 @@ export const memoryStoreTool = tool({
 
           const truncatedValue = truncateValue(value);
           const limit = scope === "global" ? 50 : 30;
-          const query = scope === "global" ? { scope: "global" } : { scope: "user", username };
+          const query =
+            scope === "global"
+              ? { scope: "global" }
+              : { scope: "user", username };
           const count = await Memory.countDocuments(query);
 
           if (count >= limit) {
@@ -51,7 +76,7 @@ export const memoryStoreTool = tool({
               username: scope === "global" ? null : username,
               createdBy: username ?? "unknown",
             },
-            { upsert: true }
+            { upsert: true },
           );
 
           return {
@@ -64,7 +89,10 @@ export const memoryStoreTool = tool({
           if (!key) {
             return { error: "Key is required for get" };
           }
-          const query = scope === "global" ? { key, scope: "global" } : { key, scope: "user", username };
+          const query =
+            scope === "global"
+              ? { key, scope: "global" }
+              : { key, scope: "user", username };
           const item = await Memory.findOne(query);
 
           if (!item) {
@@ -84,7 +112,10 @@ export const memoryStoreTool = tool({
           if (!key) {
             return { error: "Key is required for delete" };
           }
-          const query = scope === "global" ? { key, scope: "global" } : { key, scope: "user", username };
+          const query =
+            scope === "global"
+              ? { key, scope: "global" }
+              : { key, scope: "user", username };
           const result = await Memory.deleteOne(query);
 
           if (result.deletedCount > 0) {
@@ -94,17 +125,32 @@ export const memoryStoreTool = tool({
         }
 
         case "list": {
-          const memories: { scope: string; key: string; value: string; createdBy: string }[] = [];
+          const memories: {
+            scope: string;
+            key: string;
+            value: string;
+            createdBy: string;
+          }[] = [];
 
           const globalMemories = await Memory.find({ scope: "global" });
           for (const m of globalMemories) {
-            memories.push({ scope: "global", key: m.key, value: m.value, createdBy: m.createdBy });
+            memories.push({
+              scope: "global",
+              key: m.key,
+              value: m.value,
+              createdBy: m.createdBy,
+            });
           }
 
           if (username) {
             const userMemories = await Memory.find({ scope: "user", username });
             for (const m of userMemories) {
-              memories.push({ scope: "user", key: m.key, value: m.value, createdBy: m.createdBy });
+              memories.push({
+                scope: "user",
+                key: m.key,
+                value: m.value,
+                createdBy: m.createdBy,
+              });
             }
           }
 
@@ -115,8 +161,12 @@ export const memoryStoreTool = tool({
           return { error: `Unknown action: ${action}` };
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toolLogger.error({ error: errorMessage }, "Memory store operation failed");
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      toolLogger.error(
+        { error: errorMessage },
+        "Memory store operation failed",
+      );
       return { error: errorMessage };
     }
   },
@@ -125,12 +175,13 @@ export const memoryStoreTool = tool({
 export const memoryRecallTool = tool({
   name: "memory_recall",
   description:
-    "Recall all stored memories for context. Use this at the start of conversations or when you need to remember what you know about a user.",
+    "Recall all stored memories for the current user. Use this when you need to remember what you know about the user. Username is automatically detected.",
   inputSchema: z.object({
-    username: z.string().nullable().describe("The username to recall memories for."),
     include_global: z.boolean().describe("Whether to include global memories."),
   }),
-  execute: async ({ username, include_global }) => {
+  execute: async ({ include_global }) => {
+    // Always get username from context
+    const username = getContextUsername();
     toolLogger.info({ username, include_global }, "Recalling memories");
 
     const maxTotalLength = 2000;
@@ -173,19 +224,29 @@ export const memoryRecallTool = tool({
       return { hasMemories: false, message: "No memories stored yet." };
     }
 
-    return { hasMemories: true, summary: allLines.join("\n") };
+    const result = { hasMemories: true, summary: allLines.join("\n") };
+    toolLogger.info({ result }, "Memory recall result");
+    return result;
   },
 });
 
 export const searchMemoryTool = tool({
   name: "search_memory",
-  description: "Search through stored memories by keyword.",
+  description:
+    "Search through stored memories by keyword. Searches current user's memories by default.",
   inputSchema: z.object({
-    query: z.string().describe("Search query to find in memory keys and values."),
-    username: z.string().nullable().describe("Filter by specific username."),
-    scope: z.enum(["global", "user"]).nullable().describe("Filter by scope."),
+    query: z
+      .string()
+      .describe("Search query to find in memory keys and values."),
+    scope: z
+      .enum(["global", "user", "all"])
+      .nullable()
+      .describe(
+        "Filter by scope: 'user' for current user only, 'global' for global only, 'all' or null for both.",
+      ),
   }),
-  execute: async ({ query, username, scope }) => {
+  execute: async ({ query, scope }) => {
+    const username = getContextUsername();
     toolLogger.info({ query, username, scope }, "Searching memories");
 
     try {
@@ -194,13 +255,23 @@ export const searchMemoryTool = tool({
         $or: [{ key: regex }, { value: regex }],
       };
 
-      if (scope) filter.scope = scope;
-      if (username) filter.username = username;
+      if (scope === "global") {
+        filter.scope = "global";
+      } else if (scope === "user") {
+        filter.scope = "user";
+        filter.username = username;
+      }
+      // scope === "all" or null: no additional filter
 
-      const results = await Memory.find(filter).limit(20).sort({ updatedAt: -1 });
+      const results = await Memory.find(filter)
+        .limit(20)
+        .sort({ updatedAt: -1 });
 
       if (results.length === 0) {
-        return { found: false, message: `No memories found matching "${query}"` };
+        return {
+          found: false,
+          message: `No memories found matching "${query}"`,
+        };
       }
 
       const memories = results.map((m) => ({
@@ -213,7 +284,8 @@ export const searchMemoryTool = tool({
 
       return { found: true, count: memories.length, memories };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Memory search failed");
       return { error: errorMessage };
     }
@@ -232,30 +304,45 @@ function messageMatchesCriteria(
   content: string,
   msgAuthor: string,
   queryRegex: RegExp,
-  authorFilter: string | null
+  authorFilter: string | null,
 ): boolean {
   const contentMatches = queryRegex.test(content);
-  const authorMatches = !authorFilter || new RegExp(authorFilter, "i").test(msgAuthor);
+  const authorMatches =
+    !authorFilter || new RegExp(authorFilter, "i").test(msgAuthor);
   return contentMatches && authorMatches;
 }
 
 function truncateContent(content: string, maxLen = 200): string {
-  return content.length > maxLen ? content.slice(0, maxLen - 3) + "..." : content;
+  return content.length > maxLen
+    ? content.slice(0, maxLen - 3) + "..."
+    : content;
 }
 
 function extractMatchingMessages(
   conversations: Array<{
     channelId: string;
-    messages: Array<{ author: string; content: string; isBot: boolean; timestamp: Date }>;
+    messages: Array<{
+      author: string;
+      content: string;
+      isBot: boolean;
+      timestamp: Date;
+    }>;
   }>,
   queryRegex: RegExp,
-  authorFilter: string | null
+  authorFilter: string | null,
 ): ConversationMatch[] {
   const matches: ConversationMatch[] = [];
 
   for (const conv of conversations) {
     for (const msg of conv.messages) {
-      if (messageMatchesCriteria(msg.content, msg.author, queryRegex, authorFilter)) {
+      if (
+        messageMatchesCriteria(
+          msg.content,
+          msg.author,
+          queryRegex,
+          authorFilter,
+        )
+      ) {
         matches.push({
           channelId: conv.channelId,
           author: msg.author,
@@ -275,13 +362,24 @@ export const searchConversationTool = tool({
   description:
     "Search through past conversation history stored in the database. Use this to recall what was discussed previously.",
   inputSchema: z.object({
-    query: z.string().describe("Search query to find in conversation messages."),
+    query: z
+      .string()
+      .describe("Search query to find in conversation messages."),
     author: z.string().nullable().describe("Filter by message author."),
-    channel_id: z.string().nullable().describe("Filter by specific channel ID."),
-    limit: z.number().nullable().describe("Maximum results to return (default 20, max 50)."),
+    channel_id: z
+      .string()
+      .nullable()
+      .describe("Filter by specific channel ID."),
+    limit: z
+      .number()
+      .nullable()
+      .describe("Maximum results to return (default 20, max 50)."),
   }),
   execute: async ({ query, author, channel_id, limit }) => {
-    toolLogger.info({ query, author, channel_id, limit }, "Searching conversations");
+    toolLogger.info(
+      { query, author, channel_id, limit },
+      "Searching conversations",
+    );
 
     try {
       const maxLimit = Math.min(limit ?? 20, 50);
@@ -291,18 +389,29 @@ export const searchConversationTool = tool({
       if (channel_id) filter.channelId = channel_id;
 
       const conversations = await Conversation.find(filter).lean();
-      const matchingMessages = extractMatchingMessages(conversations, regex, author);
+      const matchingMessages = extractMatchingMessages(
+        conversations,
+        regex,
+        author,
+      );
 
-      matchingMessages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      matchingMessages.sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
       const results = matchingMessages.slice(0, maxLimit);
 
       if (results.length === 0) {
-        return { found: false, message: `No conversation history found matching "${query}"` };
+        return {
+          found: false,
+          message: `No conversation history found matching "${query}"`,
+        };
       }
 
       return { found: true, count: results.length, messages: results };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Conversation search failed");
       return { error: errorMessage };
     }

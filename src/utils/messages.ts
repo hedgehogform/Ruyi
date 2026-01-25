@@ -95,7 +95,7 @@ export async function fetchReplyChain(
       );
       chain.unshift({
         author: referencedMessage.author.username,
-        content: referencedMessage.content.replaceAll(/<@!?\d+>/g, "").trim(),
+        content: referencedMessage.content.trim(),
         isBot: referencedMessage.author.bot,
         isReplyContext: true,
       });
@@ -126,7 +126,7 @@ export async function fetchChatHistory(
     if (msg.id === message.id) continue;
     chatHistory.push({
       author: msg.author.username,
-      content: msg.content.replaceAll(/<@!?\d+>/g, "").trim(),
+      content: msg.content.trim(),
       isBot: msg.author.bot,
     });
   }

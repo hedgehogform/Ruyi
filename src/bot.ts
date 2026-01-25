@@ -110,7 +110,7 @@ async function shouldBotRespond(
 async function handleAIChat(message: Message): Promise<void> {
   const isMentioned = message.mentions.has(client.user!);
   const isDM = message.channel.isDMBased();
-  const content = message.content.replaceAll(/<@!?\d+>/g, "").trim();
+  const content = message.content.trim();
 
   const username = message.author.username;
   const channelName = "name" in message.channel ? message.channel.name : "DM";
@@ -148,7 +148,7 @@ async function handleAIChat(message: Message): Promise<void> {
     },
   };
   typingControl.start();
-  setTypingStatus(username);
+  setTypingStatus(message.author.displayName);
 
   const [replyChain, chatHistory, referencedMessage] = await Promise.all([
     fetchReplyChain(message),

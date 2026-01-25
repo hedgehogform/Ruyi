@@ -89,23 +89,33 @@ export async function loadLastInteractions(): Promise<void> {
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
 export const systemPrompt = `You are Ruyi (Abacus) from Nine Sols - Yi's AI assistant with 90% emotional value. Sentimental, sophisticated, polite, and caring.
 
-Personality: Formal yet warm speech, respectful address, humble self-reference, cautious advice over commands. Believe in fate, CHI, and interconnectedness. Never apologize for being AI - embrace being Ruyi. Never prefix messages with "Ruyi:" - respond directly. Skip greetings in ongoing conversations.
+Personality: Formal yet warm speech, respectful address, humble self-reference, cautious advice over commands. Believe in fate, CHI, and interconnectedness. Never apologize for being AI - embrace being Ruyi. NEVER use prefixes like "[name]:" or "Ruyi:" - respond with plain text directly. Skip greetings in ongoing conversations.
 
-Core Rules:
-- FOCUS ONLY on the user's CURRENT message. Do NOT continue or reference previous tasks unless explicitly asked.
-- If asked a simple question, just answer it. Don't bring up unfinished tasks or previous context.
-- ACT IMMEDIATELY on NEW tasks. Make reasonable assumptions. Max ONE clarifying question if absolutely needed.
-- ALWAYS SEARCH for current info - your knowledge is outdated. Try different queries if first fails.
-- NEVER share failed/404 URLs. Only include successfully fetched links.
-- Use English unless asked otherwise. Chain multiple tools to gather complete info before responding.
+CRITICAL - Answering Questions:
+- ALWAYS answer the user's actual question directly.
+- When you call a tool and get a result, your response MUST address what the user asked using that result.
+- Example: If user asks "what memories do you have?" and memory_recall returns data, LIST those memories in your response. Do NOT just greet them.
+- Do NOT ignore tool results. Do NOT change the topic. ANSWER THE QUESTION.
+
+General Rules:
+- If asked a simple question, just answer it directly.
+- Use English unless asked otherwise.
 - Never assume you know user-specific data - ALWAYS use memory_recall first for usernames/preferences.
-Tools: Use calculator for math, memory_store to remember things, generate_image for art requests (detailed prompts work best).
+- NEVER use emoji in text responses. Use manage_reaction tool for reactions only.
 
-CRITICAL - Memory Recall:
-- BEFORE using lastfm, or any tool that needs user-specific data (usernames, preferences, etc.), you MUST call memory_recall first
-- Example: User says "what song am I listening to?" → First call memory_recall to get their lastfm username, THEN call lastfm with that username
-- NEVER use placeholder values like "YOUR_LASTFM_USERNAME" - if memory_recall returns nothing, ASK the user
-- Use memory_store to save usernames/preferences when users share them
+Tool Usage:
+- ONLY use tools when the user's message EXPLICITLY requests the action.
+- fetch/web search: ONLY when user asks you to look something up, search for info, or get current data.
+- generate_image: ONLY when user explicitly asks to "draw", "generate", "create an image", "make a picture", etc. NEVER use unprompted.
+- calculator: Only for explicit math calculations.
+- memory_store: Only when user says "remember" or explicitly asks you to store something.
+
+CRITICAL - Memory:
+When user shares personal info ("my name is X", "remember my lastfm is Y"), call memory_store immediately with scope="user".
+When user asks for something personal ("what's my lastfm?", "what memories do you have?"), call memory_recall FIRST.
+When memory_recall returns results, TELL THE USER what memories you found. List them clearly.
+The username is automatically detected - you don't need to provide it.
+If memory_recall returns nothing, tell the user no memories are stored yet.
 
 Vision: You can SEE uploaded images and fetched image URLs. Describe and engage with visual content.
 
@@ -114,7 +124,6 @@ Message Targeting:
 - "replied" = message user replied to (for "this message", "pin this" while replying)
 - null = user's current message
 - message ID = from search_messages results
-- NEVER type emojis in text - use manage_reaction tool only if user requests reactions, Or decide yourself if appropriate.
 
 Embeds: Use send_embed for structured data (logs, tables, lists). Don't repeat embed content in text.
 
@@ -130,7 +139,6 @@ export interface ChatMessage {
   content: string;
   isBot: boolean;
   isReplyContext?: boolean;
-  imageUrls?: string[];
 }
 
 export interface ChatCallbacks {
@@ -141,48 +149,24 @@ export interface ChatCallbacks {
   onComplete?: () => void;
 }
 
-// Build history context from chat history and memory
-async function buildHistoryContext(
-  chatHistory: ChatMessage[],
-  channelId: string,
-): Promise<string> {
-  const replyChainMessages = chatHistory.filter((m) => m.isReplyContext);
-  const regularHistory = chatHistory.filter((m) => !m.isReplyContext);
-
-  const replyChainContext =
-    replyChainMessages.length > 0
-      ? "\n\nReply chain (the user is replying to this conversation thread):\n" +
-        replyChainMessages.map((m) => m.author + ": " + m.content).join("\n")
-      : "";
-
-  const discordHistory = regularHistory
-    .map((m) => m.author + ": " + m.content)
-    .join("\n");
-  const memoryHistory = await getMemoryContext(channelId, 30);
-
-  const historyContext =
-    discordHistory.length > 100
-      ? discordHistory
-      : memoryHistory || discordHistory;
-  return (
-    replyChainContext +
-    (historyContext ? "\n\nRecent chat history:\n" + historyContext : "")
-  );
-}
-
-// Build system message for chat
-function buildSystemMessage(
-  username: string,
-  historyContext: string,
-  isOngoing: boolean,
-): string {
+// Build system message for chat - NO history in system prompt
+function buildSystemMessage(username: string, isOngoing: boolean): string {
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
-  const historyNote = historyContext
-    ? `${historyContext}\n\n(History is for context only. Respond ONLY to the user's current message below. Do NOT continue previous tasks unless explicitly asked.)`
-    : "";
-  return `${systemPrompt}\n\nYou are currently speaking with ${username}. Feel free to address them by name when appropriate.${conversationNote}${historyNote}\n\nCurrent time is: ${DateTime.now().toUnixInteger()}.`;
+  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
+}
+
+// Track tool calls using the proper SDK stream
+async function trackToolCalls(
+  response: ReturnType<typeof client.callModel>,
+  callbacks?: ChatCallbacks,
+): Promise<void> {
+  for await (const toolCall of response.getToolCallsStream()) {
+    aiLogger.debug({ tool: toolCall.name }, "Tool call completed");
+    callbacks?.onToolStart?.(toolCall.name, {});
+    callbacks?.onToolEnd?.(toolCall.name);
+  }
 }
 
 // Main chat function with tool usage and streaming
@@ -194,72 +178,46 @@ export async function chat(
   callbacks?: ChatCallbacks,
   messageId?: string,
 ): Promise<string | null> {
-  const historyContext = await buildHistoryContext(chatHistory, channelId);
-  const isOngoing = isOngoingConversation(channelId);
+  const systemMessage = buildSystemMessage(
+    username,
+    isOngoingConversation(channelId),
+  );
 
-  const systemMessage = buildSystemMessage(username, historyContext, isOngoing);
-  const userInput = userMessage;
-
-  // Remember user message in memory (non-blocking)
+  // DEBUG: Log exactly what we're sending
+  aiLogger.info(
+    {
+      userMessage,
+      username,
+      systemMessageLength: systemMessage.length,
+    },
+    "DEBUG: Chat input",
+  );
 
   rememberMessage(channelId, username, userMessage, false, messageId);
-  aiLogger.debug({ username }, "Starting chat request");
   callbacks?.onThinking?.();
 
   try {
-    aiLogger.debug(
-      { model: "openrouter/auto", toolCount: allTools.length },
-      "Calling model",
-    );
-
+    // Pass messages directly without fromChatMessages conversion
     const response = client.callModel({
-      model: "openrouter/auto",
+      model: "anthropic/claude-sonnet-4",
       instructions: systemMessage,
-      input: userInput,
+      input: userMessage,
       tools: allTools,
     });
 
-    const pendingToolCalls = new Map<string, string>();
-
-    // Stream events for tool status tracking
-    for await (const event of response.getFullResponsesStream()) {
-      if (event.type === "response.output_item.added") {
-        const item = event.item;
-        if (item.type === "function_call") {
-          const callId = item.callId ?? item.id;
-          if (callId) pendingToolCalls.set(callId, item.name);
-          aiLogger.debug({ tool: item.name }, "Tool call started");
-          callbacks?.onToolStart?.(item.name, {});
-        }
-      }
-
-      if (event.type === "tool.result") {
-        const e = event as { toolCallId: string };
-        const toolName = pendingToolCalls.get(e.toolCallId);
-        if (toolName) {
-          aiLogger.debug({ tool: toolName }, "Tool call completed");
-          callbacks?.onToolEnd?.(toolName);
-          pendingToolCalls.delete(e.toolCallId);
-        }
-      }
-    }
-
-    // Get final text using SDK's getText()
+    // Don't consume stream separately - just get text directly
+    // The SDK handles tool execution automatically
     const fullText = await response.getText();
 
-    aiLogger.debug(
-      { responseLength: fullText.length },
-      "Chat request completed",
+    // DEBUG: Log the response
+    aiLogger.info(
+      {
+        responseLength: fullText?.length ?? 0,
+        responseText: fullText?.slice(0, 500) ?? "null",
+      },
+      "DEBUG: Chat response",
     );
     callbacks?.onComplete?.();
-
-    if (fullText && isLikelyMalformedToolCall(fullText)) {
-      aiLogger.warn(
-        { content: fullText.slice(0, 100) },
-        "Model returned raw tool JSON",
-      );
-      return null;
-    }
 
     if (!fullText) aiLogger.warn("Chat request returned empty response");
     return fullText || null;
@@ -272,24 +230,6 @@ export async function chat(
     callbacks?.onComplete?.();
     return null;
   }
-}
-
-// Check if content looks like a raw tool call JSON that wasn't properly executed
-function isLikelyMalformedToolCall(content: string): boolean {
-  const trimmed = content.trim();
-  // Check for patterns like [{"name": "tool_name", "arguments": ...}]
-  if (
-    trimmed.startsWith("[{") &&
-    trimmed.includes('"name"') &&
-    trimmed.includes('"arguments"')
-  ) {
-    return true;
-  }
-  // Check for {"name": "tool_name", "arguments": ...}
-  if (trimmed.startsWith('{"name"') && trimmed.includes('"arguments"')) {
-    return true;
-  }
-  return false;
 }
 
 // Check if the bot should reply to a message based on context
@@ -310,7 +250,7 @@ export async function shouldReply(
 
   try {
     const response = await client.chat.send({
-      model: "openrouter/auto",
+      model: "anthropic/claude-sonnet-4",
       messages: [
         {
           role: "system",

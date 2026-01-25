@@ -21,7 +21,7 @@ interface ImageGenerationResponse {
 function buildRequestBody(
   prompt: string,
   aspectRatio: string | null,
-  imageSize: string | null
+  imageSize: string | null,
 ): Record<string, unknown> {
   const requestBody: Record<string, unknown> = {
     model: "google/gemini-3-pro-image-preview",
@@ -82,7 +82,7 @@ async function sendImageToChannel(
   channel: { send: (options: unknown) => Promise<unknown> },
   imageBuffer: Buffer,
   imageFormat: string,
-  prompt: string
+  prompt: string,
 ): Promise<void> {
   const fileName = `generated-image.${imageFormat}`;
   const attachment = new AttachmentBuilder(imageBuffer, { name: fileName });
@@ -100,14 +100,19 @@ async function sendImageToChannel(
 export const generateImageTool = tool({
   name: "generate_image",
   description:
-    "Generate an image using AI based on a text prompt. Use this when the user asks you to create, draw, generate, or make an image, picture, artwork, illustration, etc.",
+    "Generate an image using AI. ONLY use when user EXPLICITLY requests image creation with words like 'draw', 'generate image', 'create a picture', 'make art', 'illustrate'. Do NOT use for descriptions, explanations, or when user is just discussing images/art conceptually.",
   inputSchema: z.object({
-    prompt: z.string().describe("A detailed description of the image to generate."),
+    prompt: z
+      .string()
+      .describe("A detailed description of the image to generate."),
     aspect_ratio: z
       .string()
       .nullable()
       .describe("Aspect ratio: '1:1', '16:9', '9:16', '4:3', etc."),
-    image_size: z.string().nullable().describe("Resolution: '1K', '2K', or '4K'."),
+    image_size: z
+      .string()
+      .nullable()
+      .describe("Resolution: '1K', '2K', or '4K'."),
   }),
   execute: async ({ prompt, aspect_ratio, image_size }) => {
     const ctx = getToolContext();
@@ -116,23 +121,36 @@ export const generateImageTool = tool({
       return { error: "No valid channel context available" };
     }
 
-    const channel = ctx.channel as { send: (options: unknown) => Promise<unknown> };
+    const channel = ctx.channel as {
+      send: (options: unknown) => Promise<unknown>;
+    };
     toolLogger.info({ prompt, aspect_ratio, image_size }, "Generating image");
 
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
-          "Content-Type": "application/json",
+      const response = await fetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${Bun.env.MODEL_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(
+            buildRequestBody(prompt, aspect_ratio, image_size),
+          ),
         },
-        body: JSON.stringify(buildRequestBody(prompt, aspect_ratio, image_size)),
-      });
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
-        toolLogger.error({ status: response.status, error: errorText }, "Image generation API error");
-        return { error: `Image generation failed with status ${response.status}`, details: errorText };
+        toolLogger.error(
+          { status: response.status, error: errorText },
+          "Image generation API error",
+        );
+        return {
+          error: `Image generation failed with status ${response.status}`,
+          details: errorText,
+        };
       }
 
       const data = (await response.json()) as ImageGenerationResponse;
@@ -145,20 +163,32 @@ export const generateImageTool = tool({
 
       const parsed = parseBase64Image(extracted.imageUrl!);
       if (parsed.error) {
-        toolLogger.error({ imageUrl: extracted.imageUrl?.slice(0, 100) }, parsed.error);
+        toolLogger.error(
+          { imageUrl: extracted.imageUrl?.slice(0, 100) },
+          parsed.error,
+        );
         return { error: parsed.error };
       }
 
       await sendImageToChannel(channel, parsed.buffer!, parsed.format!, prompt);
 
       toolLogger.info(
-        { prompt: prompt.slice(0, 50), format: parsed.format, size: parsed.buffer!.length },
-        "Image generated and sent"
+        {
+          prompt: prompt.slice(0, 50),
+          format: parsed.format,
+          size: parsed.buffer!.length,
+        },
+        "Image generated and sent",
       );
 
-      return { success: true, format: parsed.format, description: extracted.content ?? null };
+      return {
+        success: true,
+        format: parsed.format,
+        description: extracted.content ?? null,
+      };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
       toolLogger.error({ error: errorMessage }, "Failed to generate image");
       return { error: "Failed to generate image", details: errorMessage };
     }
