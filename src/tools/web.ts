@@ -113,22 +113,39 @@ async function webPluginRequest(
 }
 
 async function performWebSearch(query: string) {
+  toolLogger.info({ query }, "Performing web search");
   const prompt = `Search the web and provide comprehensive information about: ${query}\n\nInclude relevant facts, dates, sources, and any important details. Format the response clearly.`;
-  return webPluginRequest(
+  const result = await webPluginRequest(
     prompt,
     [{ id: "web", max_results: 10 }],
     "Web search",
     { query },
   );
+  toolLogger.info(
+    {
+      query,
+      success: result.success,
+      hasContent: !!result.content,
+      sourceCount: result.sources?.length ?? 0,
+    },
+    "Web search completed",
+  );
+  return result;
 }
 
 async function fetchUrls(urls: string[]) {
+  toolLogger.info({ urls, count: urls.length }, "Fetching URLs");
   const urlList = urls.map((u) => `- ${u}`).join("\n");
   const prompt = `Fetch and summarize the content from these URLs:\n${urlList}\n\nProvide the key information from each page. If a URL fails, note that it couldn't be accessed.`;
-  return webPluginRequest(prompt, [{ id: "web" }], "URL fetch", {
+  const result = await webPluginRequest(prompt, [{ id: "web" }], "URL fetch", {
     urls,
     urlCount: urls.length,
   });
+  toolLogger.info(
+    { urls, success: result.success, hasContent: !!result.content },
+    "URL fetch completed",
+  );
+  return result;
 }
 
 export const fetchTool = tool({
@@ -146,10 +163,12 @@ export const fetchTool = tool({
       .describe("Specific URLs to fetch content from."),
   }),
   execute: async ({ query, urls }) => {
+    toolLogger.info({ query, urls, urlCount: urls?.length ?? 0 }, "Fetch tool invoked");
     try {
       if (urls && urls.length > 0) {
         const imageUrls = urls.filter(isImageUrl);
         const regularUrls = urls.filter((url) => !isImageUrl(url));
+        toolLogger.debug({ imageUrls, regularUrls }, "Categorized URLs");
 
         if (imageUrls.length > 0 && regularUrls.length === 0) {
           toolLogger.info(
@@ -185,11 +204,12 @@ export const fetchTool = tool({
         return await performWebSearch(query);
       }
 
+      toolLogger.warn({ query, urls }, "Fetch tool called with no query or URLs");
       return { error: "Must provide either a search query or URLs to fetch" };
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      toolLogger.error({ error: errorMessage }, "Web operation failed");
+      toolLogger.error({ error: errorMessage, query, urls }, "Web operation failed");
       return { error: "Web operation failed", details: errorMessage };
     }
   },
