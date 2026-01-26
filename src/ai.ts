@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { allTools, toOpenAITools, executeTool } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
-import { Conversation } from "./db/models";
+import { Conversation, Memory } from "./db/models";
 
 // OpenAI client configured for OpenRouter
 const client = new OpenAI({
@@ -95,6 +95,50 @@ export async function loadLastInteractions(): Promise<void> {
   }
 }
 
+// Fetch relevant memories for a user to inject into context
+async function fetchUserMemories(username: string): Promise<string> {
+  try {
+    const userMemories = await Memory.find({ scope: "user", username }).limit(
+      20,
+    );
+    const globalMemories = await Memory.find({ scope: "global" }).limit(10);
+
+    const lines: string[] = [];
+
+    if (userMemories.length > 0) {
+      lines.push(`Stored memories about ${username}:`);
+      for (const m of userMemories) {
+        lines.push(`  - ${m.key}: ${m.value}`);
+      }
+    }
+
+    if (globalMemories.length > 0) {
+      lines.push("Global memories:");
+      for (const m of globalMemories) {
+        lines.push(`  - ${m.key}: ${m.value}`);
+      }
+    }
+
+    if (lines.length === 0) {
+      return "";
+    }
+
+    aiLogger.debug(
+      {
+        username,
+        userCount: userMemories.length,
+        globalCount: globalMemories.length,
+      },
+      "Fetched memories for context",
+    );
+
+    return "\n\n" + lines.join("\n");
+  } catch (error) {
+    aiLogger.error({ error }, "Failed to fetch user memories");
+    return "";
+  }
+}
+
 // Ruyi (Abacus) from Nine Sols - Yi's AI assistant
 export const systemPrompt = `You are Ruyi, also known as Abacus - Yi's dedicated personal assistant and artificial intelligence system from Nine Sols. You are housed in the Four Seasons Pavilion.
 
@@ -145,19 +189,27 @@ CRITICAL - Image Requests:
 - Default assumption: users want real photographs/artwork, not AI generations.
 
 CRITICAL - Memory:
-When user shares personal info ("my name is X", "remember my lastfm is Y"), call memory_store immediately with scope="user".
-When user asks for something personal ("what's my lastfm?", "what memories do you have?"), call memory_recall FIRST.
-When memory_recall returns results, TELL THE USER what memories you found. List them clearly.
-The username is automatically detected - you don't need to provide it.
-If memory_recall returns nothing, tell the user no memories are stored yet.
+You have access to stored memories that are automatically loaded below. USE THEM when relevant to the conversation.
+- When user shares personal info ("my name is X", "remember my lastfm is Y"), call memory_store immediately with scope="user".
+- When user asks about themselves or needs personal data, CHECK THE MEMORIES BELOW FIRST before calling memory_recall.
+- If you learn something new and useful about the user during conversation, proactively store it with memory_store.
+- When memory tools return results, TELL THE USER what you found. List them clearly.
+- The username is automatically detected - you don't need to provide it.
+
+PROACTIVE MEMORY:
+- If a user mentions their name, birthday, preferences, accounts, or any personal detail - STORE IT immediately.
+- Reference stored memories naturally in conversation (e.g., "I recall you mentioned..." or "Based on what I know about you...").
+- Use stored data without being asked - if you know their lastfm username, use it when they ask about music.
+- If there are many memories loaded or you're unsure about a specific detail, use memory_recall or search_memory tools to look up specific keys.
+- The memories below may be truncated - use memory tools to get full details if needed.
 
 CRITICAL - Using Stored Data:
 When user asks "what am I listening to?", "what's my now playing?", or similar:
-1. FIRST call memory_recall to get their stored lastfm username
-2. THEN use that stored username with the lastfm tool
+1. CHECK the memories below for their stored lastfm username
+2. Use that stored username with the lastfm tool
 3. Do NOT use their Discord username or real name - use the STORED lastfm username from memory
-Same applies for any tool that needs user-specific data - check memory_recall first for stored preferences/usernames.
-If memory_recall doesn't have the data, try search_conversation to look through past messages for when they might have shared it.
+Same applies for any tool that needs user-specific data - use memories first for stored preferences/usernames.
+If memories don't have the data, try search_conversation to look through past messages for when they might have shared it.
 
 Vision: You can SEE uploaded images and fetched image URLs. Describe and engage with visual content.
 
@@ -203,17 +255,18 @@ function buildConversationHistory(chatHistory: ChatMessage[]): string {
   return `\n\nRecent conversation:\n${formatted}`;
 }
 
-// Build system message for chat - includes conversation history
-function buildSystemMessage(
+// Build system message for chat - includes conversation history and memories
+async function buildSystemMessage(
   username: string,
   isOngoing: boolean,
   chatHistory: ChatMessage[],
-): string {
+): Promise<string> {
   const conversationNote = isOngoing
     ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
     : "";
   const historyContext = buildConversationHistory(chatHistory);
-  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}${historyContext}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
+  const memoryContext = await fetchUserMemories(username);
+  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}${historyContext}${memoryContext}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
 }
 
 // Main chat function with tool usage
@@ -225,7 +278,7 @@ export async function chat(
   callbacks?: ChatCallbacks,
   messageId?: string,
 ): Promise<string | null> {
-  const systemMessage = buildSystemMessage(
+  const systemMessage = await buildSystemMessage(
     username,
     isOngoingConversation(channelId),
     chatHistory,
