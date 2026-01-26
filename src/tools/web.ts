@@ -163,7 +163,10 @@ export const fetchTool = tool({
       .describe("Specific URLs to fetch content from."),
   }),
   execute: async ({ query, urls }) => {
-    toolLogger.info({ query, urls, urlCount: urls?.length ?? 0 }, "Fetch tool invoked");
+    toolLogger.info(
+      { query, urls, urlCount: urls?.length ?? 0 },
+      "Fetch tool invoked",
+    );
     try {
       if (urls && urls.length > 0) {
         const imageUrls = urls.filter(isImageUrl);
@@ -204,12 +207,18 @@ export const fetchTool = tool({
         return await performWebSearch(query);
       }
 
-      toolLogger.warn({ query, urls }, "Fetch tool called with no query or URLs");
+      toolLogger.warn(
+        { query, urls },
+        "Fetch tool called with no query or URLs",
+      );
       return { error: "Must provide either a search query or URLs to fetch" };
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      toolLogger.error({ error: errorMessage, query, urls }, "Web operation failed");
+      toolLogger.error(
+        { error: errorMessage, query, urls },
+        "Web operation failed",
+      );
       return { error: "Web operation failed", details: errorMessage };
     }
   },
