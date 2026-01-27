@@ -2,6 +2,85 @@ import type { Message } from "discord.js";
 import type { ChatMessage } from "../ai";
 import { botLogger } from "../logger";
 
+// Patterns for content that should not be split
+const PROTECTED_PATTERNS = [
+  /https?:\/\/[^\s\])<>]+/g, // URLs
+  /\[[^\]]*\]\([^)]+\)/g, // Markdown links
+  /```[\s\S]*?```/g, // Code blocks
+  /`[^`]+`/g, // Inline code
+];
+
+// Find all ranges in the text that should not be split
+function findProtectedRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+
+  for (const pattern of PROTECTED_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+
+  return ranges;
+}
+
+// Check if an index falls within any protected range
+function isIndexProtected(
+  index: number,
+  ranges: Array<{ start: number; end: number }>,
+): boolean {
+  return ranges.some((range) => index > range.start && index < range.end);
+}
+
+// Find the nearest protected range that the index falls within
+function findProtectedRangeStart(
+  index: number,
+  ranges: Array<{ start: number; end: number }>,
+): number | null {
+  for (const range of ranges) {
+    if (index > range.start && index < range.end) {
+      return range.start;
+    }
+  }
+  return null;
+}
+
+// Find a safe split point that doesn't break protected content
+function findSafeSplitPoint(
+  text: string,
+  maxLength: number,
+  protectedRanges: Array<{ start: number; end: number }>,
+): number {
+  let splitIndex = maxLength;
+
+  // Check if split point is inside protected content
+  const protectedStart = findProtectedRangeStart(splitIndex, protectedRanges);
+  if (protectedStart !== null) {
+    splitIndex = protectedStart;
+  }
+
+  // Try to find a natural break point (newline or space)
+  if (splitIndex > 100) {
+    const newlineIndex = text.lastIndexOf("\n", splitIndex);
+    if (newlineIndex > splitIndex - 300 && newlineIndex > 0) {
+      if (!isIndexProtected(newlineIndex, protectedRanges)) {
+        return newlineIndex + 1;
+      }
+    }
+
+    const spaceIndex = text.lastIndexOf(" ", splitIndex);
+    if (spaceIndex > splitIndex - 200 && spaceIndex > 0) {
+      if (!isIndexProtected(spaceIndex, protectedRanges)) {
+        return spaceIndex + 1;
+      }
+    }
+  }
+
+  // Fallback: if splitIndex is too small, force split at maxLength
+  return splitIndex < 50 ? maxLength : splitIndex;
+}
+
 export function splitMessage(text: string, maxLength = 2000): string[] {
   if (text.length <= maxLength) return [text];
 
@@ -14,16 +93,8 @@ export function splitMessage(text: string, maxLength = 2000): string[] {
       break;
     }
 
-    let splitIndex = maxLength;
-    const newlineIndex = remaining.lastIndexOf("\n", maxLength);
-    if (newlineIndex > maxLength - 200) {
-      splitIndex = newlineIndex + 1;
-    } else {
-      const spaceIndex = remaining.lastIndexOf(" ", maxLength);
-      if (spaceIndex > maxLength - 100) {
-        splitIndex = spaceIndex + 1;
-      }
-    }
+    const protectedRanges = findProtectedRanges(remaining);
+    const splitIndex = findSafeSplitPoint(remaining, maxLength, protectedRanges);
 
     chunks.push(remaining.slice(0, splitIndex).trimEnd());
     remaining = remaining.slice(splitIndex).trimStart();

@@ -222,10 +222,13 @@ Tool Usage:
 - memory_store: Only when user says "remember" or explicitly asks you to store something.
 
 CRITICAL - Image Requests:
-- When user asks for an image ("give me an image of X", "show me X", "find a picture of X"), ALWAYS use web search to find real image links. Users want ACTUAL images, not AI-generated ones.
+- When user asks for an image ("give me an image of X", "show me X", "find a picture of X", "fanart of X"), use web search to find real image links.
+- Format image links using markdown to hide ugly URLs: [Source - Title](url) e.g., [Pinterest - Shadow Fanart](https://i.pinimg.com/...)
+- Discord will still embed the image, but the link text looks cleaner.
+- NEVER ask clarifying questions about SFW/NSFW or platform preferences - just provide SFW images from wherever you find them.
 - NEVER use generate_image unless the user EXPLICITLY asks for AI-generated/created/drawn images (e.g., "generate an AI image", "draw me", "create an AI picture").
-- If unsure whether they want real or AI-generated, ask them first: "Would you like me to search for existing images or generate one with AI?"
-- Default assumption: users want real photographs/artwork, not AI generations.
+- Default assumption: users want real photographs/artwork, not AI generations. Deliver images immediately, don't ask questions.
+- NEVER make up or guess image descriptions. You cannot see what's in the image. Only use the title/source from the search results. Do NOT describe poses, styles, or content you haven't verified.
 
 CRITICAL - Memory:
 You have access to stored memories that are automatically loaded below. USE THEM when relevant to the conversation.
@@ -413,9 +416,11 @@ export async function chat(options: ChatOptions): Promise<string | null> {
     });
 
     // Send message and wait for completion - returns the final assistant message
-    const result = await copilotSession.sendAndWait({
-      prompt: userMessage,
-    });
+    // Use 5 minute timeout (300000ms) for tool calls that may take longer (e.g., web search)
+    const result = await copilotSession.sendAndWait(
+      { prompt: userMessage },
+      300000,
+    );
     const finalContent = result?.data.content ?? null;
 
     // DEBUG: Log the response
