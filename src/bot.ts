@@ -12,11 +12,7 @@ import { setToolContext } from "./tools";
 import { botLogger } from "./logger";
 import { handleCommands } from "./commands";
 import { slashCommands, handleSlashCommand } from "./slashCommands";
-import {
-  createStatusState,
-  buildStatusEmbed,
-  createChatCallbacks,
-} from "./utils/status";
+import { ChatSession } from "./utils/chatSession";
 import {
   fetchReplyChain,
   fetchChatHistory,
@@ -126,28 +122,8 @@ async function handleAIChat(message: Message): Promise<void> {
 
   if (!shouldRespond) return;
 
-  // Typing indicator control - only show when AI is generating text, not during tool calls
-  let typingInterval: ReturnType<typeof setInterval> | null = null;
-  const typingControl = {
-    start: () => {
-      if (typingInterval) return; // Already running
-      if ("sendTyping" in message.channel) {
-        message.channel.sendTyping().catch(() => {});
-        typingInterval = setInterval(() => {
-          if ("sendTyping" in message.channel) {
-            message.channel.sendTyping().catch(() => {});
-          }
-        }, 8000);
-      }
-    },
-    stop: () => {
-      if (typingInterval) {
-        clearInterval(typingInterval);
-        typingInterval = null;
-      }
-    },
-  };
-  typingControl.start();
+  const session = new ChatSession(message.channel);
+  session.startTyping();
   setTypingStatus(message.author.displayName);
 
   const [replyChain, chatHistory, referencedMessage] = await Promise.all([
@@ -168,44 +144,21 @@ async function handleAIChat(message: Message): Promise<void> {
   const channel = "name" in message.channel ? message.channel : null;
   setToolContext(message, channel as any, message.guild, referencedMessage);
 
-  const state = createStatusState();
-  const statusMessage = await message.reply({
-    embeds: [buildStatusEmbed(state)],
-  });
-
-  const updateEmbed = async () => {
-    try {
-      await statusMessage.edit({ embeds: [buildStatusEmbed(state)] });
-    } catch {}
-  };
-
-  const updateInterval = setInterval(() => {
-    if (state.status !== "complete" && state.status !== "error") updateEmbed();
-  }, 1000);
-
-  const deleteStatusEmbed = async () => {
-    clearInterval(updateInterval);
-    try {
-      await statusMessage.delete();
-    } catch {}
-  };
-
-  const callbacks = createChatCallbacks(state, updateEmbed, typingControl);
+  await session.sendStatusEmbed(message);
 
   try {
-    const reply = await chat(
-      content,
+    const reply = await chat({
+      userMessage: content,
       username,
-      message.channel.id,
-      combinedHistory,
-      callbacks,
-      message.id,
-    );
-    await deleteStatusEmbed();
+      channelId: message.channel.id,
+      session,
+      chatHistory: combinedHistory,
+      messageId: message.id,
+    });
+    await session.deleteStatusEmbed();
 
     if (reply) {
       const sentChunks = await sendReplyChunks(message, reply, username);
-      // Store each chunk with its own message ID
       for (const chunk of sentChunks) {
         rememberMessage(
           message.channel.id,
@@ -216,8 +169,8 @@ async function handleAIChat(message: Message): Promise<void> {
         );
       }
     } else {
-      const usedSelfRespondingTool = [...state.toolCounts.keys()].some((t) =>
-        SELF_RESPONDING_TOOLS.has(t),
+      const usedSelfRespondingTool = session.usedSelfRespondingTool(
+        SELF_RESPONDING_TOOLS,
       );
       if (!usedSelfRespondingTool) {
         await message.reply("I was unable to generate a response.");
@@ -237,11 +190,10 @@ async function handleAIChat(message: Message): Promise<void> {
       },
       "Failed to generate reply",
     );
-    await deleteStatusEmbed();
+    await session.deleteStatusEmbed();
     await message.reply(getErrorMessage(error));
   } finally {
-    clearInterval(updateInterval);
-    typingControl.stop();
+    session.cleanup();
     setDefaultPresence();
   }
 }
