@@ -52,25 +52,29 @@ async function shouldBotRespond(
   channelName: string | null,
   isMentioned: boolean,
   isDM: boolean,
+  isReplyToBot: boolean,
   channelId: string,
 ): Promise<boolean> {
-  if (isMentioned || isDM) {
+  // Skip shouldReply check entirely for mentions, DMs, or replies to bot - always respond
+  if (isMentioned || isDM || isReplyToBot) {
     botLogger.info(
       {
         user: username,
         channel: channelName,
         mentioned: isMentioned,
         dm: isDM,
+        replyToBot: isReplyToBot,
       },
-      "Replying to mention/DM",
+      "Replying to mention/DM/reply",
     );
     return true;
   }
 
+  // Only run shouldReply for standalone messages (saves tokens)
   try {
     botLogger.debug(
       { user: username, channel: channelName, content: content.slice(0, 50) },
-      "Checking if should reply",
+      "Checking if should reply to standalone message",
     );
     const shouldRespond = await shouldReply(
       content,
@@ -106,6 +110,12 @@ async function shouldBotRespond(
 async function handleAIChat(message: Message): Promise<void> {
   const isMentioned = message.mentions.has(client.user!);
   const isDM = message.channel.isDMBased();
+  const isReplyToBot =
+    message.reference?.messageId != null &&
+    (await message.channel.messages
+      .fetch(message.reference.messageId)
+      .then((msg) => msg.author.id === client.user!.id)
+      .catch(() => false));
   const content = message.content.trim();
 
   const username = message.author.username;
@@ -117,6 +127,7 @@ async function handleAIChat(message: Message): Promise<void> {
     channelName,
     isMentioned,
     isDM,
+    isReplyToBot,
     message.channel.id,
   );
 
