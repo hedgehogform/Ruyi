@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import { toolLogger } from "../logger";
@@ -97,11 +97,10 @@ async function sendImageToChannel(
   await channel.send({ embeds: [embed], files: [attachment] });
 }
 
-export const generateImageTool = tool({
-  name: "generate_image",
+export const generateImageTool = defineTool("generate_image", {
   description:
     "Generate an image using AI. ONLY use when user EXPLICITLY requests image creation with words like 'draw', 'generate image', 'create a picture', 'make art', 'illustrate'. Do NOT use for descriptions, explanations, or when user is just discussing images/art conceptually.",
-  inputSchema: z.object({
+  parameters: z.object({
     prompt: z
       .string()
       .describe("A detailed description of the image to generate."),
@@ -114,7 +113,7 @@ export const generateImageTool = tool({
       .nullable()
       .describe("Resolution: '1K', '2K', or '4K'."),
   }),
-  execute: async ({ prompt, aspect_ratio, image_size }) => {
+  handler: async ({ prompt, aspect_ratio, image_size }) => {
     const ctx = getToolContext();
 
     if (!ctx.channel || !("send" in ctx.channel)) {

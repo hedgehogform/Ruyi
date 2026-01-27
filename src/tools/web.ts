@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 
@@ -148,11 +148,10 @@ async function fetchUrls(urls: string[]) {
   return result;
 }
 
-export const fetchTool = tool({
-  name: "fetch",
+export const fetchTool = defineTool("fetch", {
   description:
     "Search the web or fetch content from URLs. Use this for current events, facts, documentation, or any information that requires up-to-date data.",
-  inputSchema: z.object({
+  parameters: z.object({
     query: z
       .string()
       .nullable()
@@ -162,14 +161,14 @@ export const fetchTool = tool({
       .nullable()
       .describe("Specific URLs to fetch content from."),
   }),
-  execute: async ({ query, urls }) => {
+  handler: async ({ query, urls }) => {
     toolLogger.info(
       { query, urls, urlCount: urls?.length ?? 0 },
       "Fetch tool invoked",
     );
     try {
       if (urls && urls.length > 0) {
-        const imageUrls = urls.filter(isImageUrl);
+        const imageUrls = urls.filter((url) => isImageUrl(url));
         const regularUrls = urls.filter((url) => !isImageUrl(url));
         toolLogger.debug({ imageUrls, regularUrls }, "Categorized URLs");
 

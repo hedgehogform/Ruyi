@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { Memory, Conversation } from "../db/models";
@@ -138,11 +138,10 @@ async function handleListMemories(username: string | null) {
   return { count: memories.length, memories };
 }
 
-export const memoryStoreTool = tool({
-  name: "memory_store",
+export const memoryStoreTool = defineTool("memory_store", {
   description:
     "Store information to remember for later. Use this when a user asks you to remember something, save a note, or store information. The username is automatically detected from the message context.",
-  inputSchema: z.object({
+  parameters: z.object({
     action: z
       .enum(["save", "get", "delete", "list"])
       .describe("The action to perform."),
@@ -162,7 +161,7 @@ export const memoryStoreTool = tool({
         "Where to store the memory. Use 'user' for personal info about the current user.",
       ),
   }),
-  execute: async ({ action, key, value, scope }) => {
+  handler: async ({ action, key, value, scope }) => {
     const username = getContextUsername();
     toolLogger.info({ action, key, scope, username }, "Memory store operation");
 
@@ -219,14 +218,13 @@ function collectMemoryLines(
   return { lines, newLength: length };
 }
 
-export const memoryRecallTool = tool({
-  name: "memory_recall",
+export const memoryRecallTool = defineTool("memory_recall", {
   description:
     "Recall all stored memories for the current user. Use this when you need to remember what you know about the user. Username is automatically detected.",
-  inputSchema: z.object({
+  parameters: z.object({
     include_global: z.boolean().describe("Whether to include global memories."),
   }),
-  execute: async ({ include_global }) => {
+  handler: async ({ include_global }) => {
     const username = getContextUsername();
     toolLogger.info({ username, include_global }, "Recalling memories");
 
@@ -267,11 +265,10 @@ export const memoryRecallTool = tool({
   },
 });
 
-export const searchMemoryTool = tool({
-  name: "search_memory",
+export const searchMemoryTool = defineTool("search_memory", {
   description:
     "Search through stored memories by keyword. Searches current user's memories by default.",
-  inputSchema: z.object({
+  parameters: z.object({
     query: z
       .string()
       .describe("Search query to find in memory keys and values."),
@@ -282,27 +279,26 @@ export const searchMemoryTool = tool({
         "Filter by scope: 'user' for current user only, 'global' for global only, 'all' or null for both.",
       ),
   }),
-  execute: async ({ query, scope }) => {
+  handler: async ({ query, scope }) => {
     const username = getContextUsername();
     toolLogger.info({ query, username, scope }, "Searching memories");
 
     try {
       const regex = new RegExp(query, "i");
-      const filter: Record<string, unknown> = {
-        $or: [{ key: regex }, { value: regex }],
-      };
+      let memoryQuery = Memory.find().or([{ key: regex }, { value: regex }]);
 
       if (scope === "global") {
-        filter.scope = "global";
+        memoryQuery = memoryQuery.where("scope").equals("global");
       } else if (scope === "user") {
-        filter.scope = "user";
-        filter.username = username;
+        memoryQuery = memoryQuery
+          .where("scope")
+          .equals("user")
+          .where("username")
+          .equals(username);
       }
       // scope === "all" or null: no additional filter
 
-      const results = await Memory.find(filter)
-        .limit(20)
-        .sort({ updatedAt: -1 });
+      const results = await memoryQuery.limit(20).sort({ updatedAt: -1 });
 
       if (results.length === 0) {
         return {
@@ -394,11 +390,10 @@ function extractMatchingMessages(
   return matches;
 }
 
-export const searchConversationTool = tool({
-  name: "search_conversation",
+export const searchConversationTool = defineTool("search_conversation", {
   description:
     "Search through past conversation history stored in the database. Use this to recall what was discussed previously.",
-  inputSchema: z.object({
+  parameters: z.object({
     query: z
       .string()
       .describe("Search query to find in conversation messages."),
@@ -412,7 +407,7 @@ export const searchConversationTool = tool({
       .nullable()
       .describe("Maximum results to return (default 20, max 50)."),
   }),
-  execute: async ({ query, author, channel_id, limit }) => {
+  handler: async ({ query, author, channel_id, limit }) => {
     toolLogger.info(
       { query, author, channel_id, limit },
       "Searching conversations",
@@ -422,10 +417,14 @@ export const searchConversationTool = tool({
       const maxLimit = Math.min(limit ?? 20, 50);
       const regex = new RegExp(query, "i");
 
-      const filter: Record<string, unknown> = {};
-      if (channel_id) filter.channelId = channel_id;
+      let conversationQuery = Conversation.find();
+      if (channel_id) {
+        conversationQuery = conversationQuery
+          .where("channelId")
+          .equals(channel_id);
+      }
 
-      const conversations = await Conversation.find(filter).lean();
+      const conversations = await conversationQuery.lean();
       const matchingMessages = extractMatchingMessages(
         conversations,
         regex,

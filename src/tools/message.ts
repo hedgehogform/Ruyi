@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
@@ -138,11 +138,10 @@ async function searchChannel(
   return results;
 }
 
-export const searchMessagesTool = tool({
-  name: "search_messages",
+export const searchMessagesTool = defineTool("search_messages", {
   description:
     "Search for messages in Discord. Can search current channel, a specific channel, or across the entire server. Returns message IDs, content, reactions, and URLs. Use the returned message ID with manage_reaction or delete_messages.",
-  inputSchema: z.object({
+  parameters: z.object({
     query: z
       .string()
       .nullable()
@@ -170,7 +169,7 @@ export const searchMessagesTool = tool({
       .nullable()
       .describe("Whether to include reaction details. Default true."),
   }),
-  execute: async ({
+  handler: async ({
     query,
     author,
     channel_name,
@@ -307,11 +306,10 @@ async function performDeletion(
   return deletedCount;
 }
 
-export const deleteMessagesTool = tool({
-  name: "delete_messages",
+export const deleteMessagesTool = defineTool("delete_messages", {
   description:
     "Delete messages from the current channel. Can delete specific messages by ID, messages from a specific user, or bulk delete recent messages. Requires Manage Messages permission.",
-  inputSchema: z.object({
+  parameters: z.object({
     message_ids: z
       .array(z.string())
       .nullable()
@@ -329,7 +327,7 @@ export const deleteMessagesTool = tool({
       .nullable()
       .describe("Only delete messages containing this text."),
   }),
-  execute: async ({ message_ids, author, count, contains }) => {
+  handler: async ({ message_ids, author, count, contains }) => {
     const ctx = getToolContext();
 
     if (!ctx.channel || !("messages" in ctx.channel)) {

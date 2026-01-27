@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { Message, MessageReaction } from "discord.js";
 import { toolLogger } from "../logger";
@@ -25,11 +25,10 @@ function findReaction(
   });
 }
 
-export const reactionTool = tool({
-  name: "manage_reaction",
+export const reactionTool = defineTool("manage_reaction", {
   description:
     "Add or remove emoji reactions on messages. Can target the current message, the message the user replied to, or any message by ID.",
-  inputSchema: z.object({
+  parameters: z.object({
     action: z
       .enum(["add", "remove"])
       .describe("Whether to add or remove the reaction."),
@@ -45,7 +44,7 @@ export const reactionTool = tool({
         'The target message. Use "replied" to react to the message the user replied to. Use null to react to the user\'s current message. Use a message ID to react to any other message (use search_messages to find IDs).',
       ),
   }),
-  execute: async ({ action, emoji, message_id }) => {
+  handler: async ({ action, emoji, message_id }) => {
     const result = await resolveTargetMessage(message_id, "reaction");
     if (!result.success) {
       return { error: result.error };

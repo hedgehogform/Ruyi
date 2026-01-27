@@ -1,14 +1,6 @@
 // Re-export context management
 export { setToolContext } from "../utils/types";
 
-// Re-export tool helpers
-export { toOpenAITools, executeTool } from "../utils/openai-tools";
-export type {
-  ToolDefinition,
-  OpenAIFunctionTool,
-  RuntimeTool,
-} from "../utils/openai-tools";
-
 // Re-export all tools
 export { calculatorTool } from "./calc";
 export { channelInfoTool } from "./channel";
@@ -51,7 +43,7 @@ import {
 import { auditLogTool } from "./audit";
 import { lastfmTool } from "./lastfm";
 
-// Export all tools as an array for use with OpenAI function calling
+// Export all tools as an array for use with copilot-sdk
 export const allTools = [
   calculatorTool,
   channelInfoTool,

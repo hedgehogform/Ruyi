@@ -1,13 +1,12 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { resolveTargetMessage, formatError } from "../utils/types";
 
-export const pinTool = tool({
-  name: "manage_pin",
+export const pinTool = defineTool("manage_pin", {
   description:
     "Pin or unpin messages in the current channel. Use search_messages first to find the message ID if the user references a specific message.",
-  inputSchema: z.object({
+  parameters: z.object({
     action: z
       .enum(["pin", "unpin"])
       .describe("Whether to pin or unpin the message."),
@@ -18,7 +17,7 @@ export const pinTool = tool({
         'The message ID to pin/unpin. Use "replied" for the message the user replied to, null for the user\'s current message, or an actual message ID from search_messages.',
       ),
   }),
-  execute: async ({ action, message_id }) => {
+  handler: async ({ action, message_id }) => {
     const result = await resolveTargetMessage(message_id, "pin");
     if (!result.success) {
       return { error: result.error };

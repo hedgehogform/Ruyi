@@ -1,17 +1,44 @@
-import OpenAI from "openai";
-import { allTools, toOpenAITools, executeTool } from "./tools";
+import {
+  CopilotClient,
+  type AssistantMessageEvent,
+  type SessionEvent,
+} from "@github/copilot-sdk";
+import { allTools } from "./tools";
 import { aiLogger } from "./logger";
 import { DateTime } from "luxon";
 import { Conversation, Memory } from "./db/models";
 
-// OpenAI client configured for OpenRouter
-const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: Bun.env.MODEL_TOKEN!,
-});
+// CopilotClient configured for OpenRouter BYOK
+let copilotClient: CopilotClient | null = null;
 
 // Model to use
 const MODEL = "openrouter/auto";
+
+// Get or create the CopilotClient
+async function getClient(): Promise<CopilotClient> {
+  if (copilotClient && copilotClient.getState() === "connected") {
+    return copilotClient;
+  }
+
+  copilotClient = new CopilotClient({
+    autoStart: true,
+    autoRestart: true,
+    logLevel: "warning",
+  });
+
+  await copilotClient.start();
+  aiLogger.info("CopilotClient started");
+  return copilotClient;
+}
+
+// Provider config for OpenRouter BYOK
+function getProviderConfig() {
+  return {
+    type: "openai" as const,
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiKey: Bun.env.MODEL_TOKEN!,
+  };
+}
 
 // In-memory cache for last interaction times (to avoid async checks everywhere)
 const lastInteractionCache = new Map<string, number>();
@@ -267,15 +294,29 @@ async function buildSystemMessage(
   isOngoing: boolean,
   chatHistory: ChatMessage[],
 ): Promise<string> {
-  const conversationNote = isOngoing
-    ? "\n\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly."
-    : "";
   const historyContext = buildConversationHistory(chatHistory);
   const memoryContext = await fetchUserMemories(username);
-  return `${systemPrompt}\n\nYou are currently speaking with ${username}.${conversationNote}${historyContext}${memoryContext}\n\nCurrent time: ${DateTime.now().toUnixInteger()}`;
+  const currentTime = DateTime.now().toUnixInteger();
+
+  const contextSection = [
+    `<context>`,
+    `Current user: ${username}`,
+    historyContext ? `${historyContext}` : null,
+    memoryContext ? `${memoryContext}` : null,
+    `Current time: ${currentTime}`,
+    `</context>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const instructionsSection = isOngoing
+    ? `\n\n<instructions>\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly.\n</instructions>`
+    : "";
+
+  return `${systemPrompt}\n\n${contextSection}${instructionsSection}`;
 }
 
-// Main chat function with tool usage
+// Main chat function with tool usage - uses CopilotClient with BYOK
 export async function chat(
   userMessage: string,
   username: string,
@@ -305,97 +346,63 @@ export async function chat(
   callbacks?.onThinking?.();
 
   try {
-    // Build messages array for OpenAI
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
-      { role: "system", content: systemMessage },
-      { role: "user", content: userMessage },
-    ];
+    const client = await getClient();
 
-    // Convert tools to OpenAI format
-    const openAITools = toOpenAITools([...allTools]);
+    // Create session with OpenRouter BYOK provider and custom tools
+    const session = await client.createSession({
+      model: MODEL,
+      provider: getProviderConfig(),
+      tools: [...allTools],
+      systemMessage: {
+        mode: "replace",
+        content: systemMessage,
+      },
+      streaming: false,
+      infiniteSessions: { enabled: false },
+    });
 
-    // Tool calling loop - max 10 iterations to prevent infinite loops
-    const MAX_TOOL_ITERATIONS = 10;
-    let iteration = 0;
-
-    while (iteration < MAX_TOOL_ITERATIONS) {
-      iteration++;
-
-      const response = await client.chat.completions.create({
-        model: MODEL,
-        messages,
-        tools: openAITools,
-        tool_choice: "auto",
-      });
-
-      const choice = response.choices[0];
-      if (!choice) {
-        aiLogger.warn("No choice in response");
-        break;
-      }
-
-      const assistantMessage = choice.message;
-      messages.push(assistantMessage);
-
-      // Check if there are tool calls to process
-      if (
-        !assistantMessage.tool_calls ||
-        assistantMessage.tool_calls.length === 0
-      ) {
-        // No more tool calls - we have the final response
-        const fullText = assistantMessage.content;
-
-        // DEBUG: Log the response
-        aiLogger.info(
-          {
-            responseLength: fullText?.length ?? 0,
-            responseText: fullText?.slice(0, 500) ?? "null",
-            iterations: iteration,
-          },
-          "DEBUG: Chat response",
-        );
+    // Set up event handlers for tool tracking and typing indicator
+    session.on((event: SessionEvent) => {
+      if (event.type === "tool.execution_start") {
+        // Pause typing during tool execution
+        const data = event.data as { name?: string; arguments?: unknown };
+        aiLogger.debug({ tool: data.name }, "Tool execution starting");
         callbacks?.onComplete?.();
-
-        if (!fullText) aiLogger.warn("Chat request returned empty response");
-        return fullText || null;
-      }
-
-      // Process each tool call
-      for (const toolCall of assistantMessage.tool_calls) {
-        // Only handle function tool calls
-        if (toolCall.type !== "function") continue;
-
-        const toolName = toolCall.function.name;
-        const toolArgs = toolCall.function.arguments;
-
-        aiLogger.debug({ tool: toolName, args: toolArgs }, "Executing tool");
-        callbacks?.onToolStart?.(toolName, JSON.parse(toolArgs || "{}"));
-
-        // Execute the tool
-        const result = await executeTool([...allTools], toolName, toolArgs);
-
-        aiLogger.debug(
-          { tool: toolName, result: result.slice(0, 200) },
-          "Tool result",
+        callbacks?.onToolStart?.(
+          data.name ?? "unknown",
+          (data.arguments as Record<string, unknown>) ?? {},
         );
-        callbacks?.onToolEnd?.(toolName);
-
-        // Add tool result to messages
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result,
-        });
+      } else if (event.type === "tool.execution_complete") {
+        // Resume typing after tool execution
+        const data = event.data as { name?: string };
+        aiLogger.debug({ tool: data.name }, "Tool execution complete");
+        callbacks?.onToolEnd?.(data.name ?? "unknown");
+        callbacks?.onThinking?.();
       }
-    }
+    });
 
-    // If we hit max iterations, return whatever we have
-    aiLogger.warn(
-      { iterations: MAX_TOOL_ITERATIONS },
-      "Hit max tool iterations",
+    // Send message and wait for completion - returns the final assistant message
+    const result = await session.sendAndWait({
+      prompt: userMessage,
+    });
+    const finalContent = result?.data.content ?? null;
+
+    // DEBUG: Log the response
+    aiLogger.info(
+      {
+        responseLength: finalContent?.length ?? 0,
+        responseText: finalContent?.slice(0, 500) ?? "null",
+      },
+      "DEBUG: Chat response",
     );
+
     callbacks?.onComplete?.();
-    return null;
+
+    // Clean up session
+    await session.destroy();
+
+    if (!finalContent) aiLogger.warn("Chat request returned empty response");
+    return finalContent;
   } catch (error) {
     const err = error as Error;
     aiLogger.error(
@@ -423,13 +430,7 @@ export async function shouldReply(
     ? `\nPrevious chat history:\n${historyContext}`
     : "";
 
-  try {
-    const response = await client.chat.completions.create({
-      model: MODEL,
-      messages: [
-        {
-          role: "system",
-          content: `You are a context analyzer for "${botName}", a friendly Discord bot assistant (Ruyi from Nine Sols). Reply ONLY with "yes" or "no".
+  const systemPromptText = `You are a context analyzer for "${botName}", a friendly Discord bot assistant (Ruyi from Nine Sols). Reply ONLY with "yes" or "no".
 
 Reply "yes" if:
 - Greetings like "hey", "hi", "hello", "yo", "sup", "good morning", etc.
@@ -447,15 +448,30 @@ Reply "no" if:
 - Just emojis, reactions, or "lol/lmao" type responses
 - Spam or nonsense
 - Very short messages with no substance (like just "ok" or "yeah" unless it's part of user's answer to the bot)${historySection}
-`,
-        },
-        { role: "user", content: message },
-      ],
+`;
+
+  try {
+    const client = await getClient();
+
+    // Create a simple session without tools for classification
+    const session = await client.createSession({
+      model: MODEL,
+      provider: getProviderConfig(),
+      systemMessage: {
+        mode: "replace",
+        content: systemPromptText,
+      },
+      excludedTools: ["*"], // Exclude all tools for simple classification
+      streaming: false,
+      infiniteSessions: { enabled: false },
     });
 
-    const rawContent = response.choices[0]?.message?.content;
-    const content = typeof rawContent === "string" ? rawContent : "";
-    const result = content.toLowerCase().trim() === "yes";
+    const resultEvent: AssistantMessageEvent | undefined =
+      await session.sendAndWait({ prompt: message });
+    const responseContent = resultEvent?.data.content ?? "";
+    await session.destroy();
+
+    const result = responseContent.toLowerCase().trim() === "yes";
     aiLogger.debug(
       { message: message.slice(0, 50), result },
       "shouldReply decision",

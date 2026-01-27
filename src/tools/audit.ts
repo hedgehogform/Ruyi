@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { toolLogger } from "../logger";
@@ -105,11 +105,10 @@ const actionTypes = [
   "bot_add",
 ] as const;
 
-export const auditLogTool = tool({
-  name: "get_audit_log",
+export const auditLogTool = defineTool("get_audit_log", {
   description:
     "Search and view the Discord server audit log. Shows who did what actions like bans, kicks, role changes, message deletions, etc.",
-  inputSchema: z.object({
+  parameters: z.object({
     action_type: z
       .enum(actionTypes)
       .nullable()
@@ -124,7 +123,7 @@ export const auditLogTool = tool({
       .describe("Filter by the target of the action."),
     limit: z.number().nullable().describe("Maximum entries to return (1-50)."),
   }),
-  execute: async ({ action_type, user, target_user, limit }) => {
+  handler: async ({ action_type, user, target_user, limit }) => {
     const { guild } = getToolContext();
 
     if (!guild) {

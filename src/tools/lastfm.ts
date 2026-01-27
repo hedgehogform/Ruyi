@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import {
@@ -11,11 +11,10 @@ import {
   type Period,
 } from "../lib/lastfm";
 
-export const lastfmTool = tool({
-  name: "lastfm",
+export const lastfmTool = defineTool("lastfm", {
   description:
     "Query Last.fm for music listening data. Can get recent scrobbles, now playing, user profile, and top artists/tracks/albums.",
-  inputSchema: z.object({
+  parameters: z.object({
     action: z
       .enum([
         "now_playing",
@@ -36,7 +35,7 @@ export const lastfmTool = tool({
       .nullable()
       .describe("Number of results (default: 10, max: 50)."),
   }),
-  execute: async ({ action, username, period, limit }) => {
+  handler: async ({ action, username, period, limit }) => {
     try {
       const effectiveLimit = Math.min(limit ?? 10, 50);
       const effectivePeriod: Period = period ?? "overall";

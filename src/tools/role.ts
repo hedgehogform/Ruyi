@@ -1,4 +1,4 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import type { ColorResolvable, Guild, Role, GuildMember } from "discord.js";
 import { toolLogger } from "../logger";
@@ -148,11 +148,10 @@ async function handleRemoveRole(
   };
 }
 
-export const manageRoleTool = tool({
-  name: "manage_role",
+export const manageRoleTool = defineTool("manage_role", {
   description:
     "Manage Discord roles: create a new role, edit an existing role's name/color, or assign/remove a role from a user",
-  inputSchema: z.object({
+  parameters: z.object({
     action: z
       .enum(["create", "edit", "assign", "remove"])
       .describe(
@@ -178,7 +177,7 @@ export const manageRoleTool = tool({
         "Username to assign/remove the role to/from (for assign/remove actions, null otherwise)",
       ),
   }),
-  execute: async ({ action, role_name, new_name, color, username }) => {
+  handler: async ({ action, role_name, new_name, color, username }) => {
     const { guild } = getToolContext();
     if (!guild) {
       toolLogger.warn("manage_role called without guild context");

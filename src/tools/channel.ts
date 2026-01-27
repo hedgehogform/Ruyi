@@ -1,13 +1,12 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
 
-export const channelInfoTool = tool({
-  name: "get_channel_info",
+export const channelInfoTool = defineTool("get_channel_info", {
   description: "Get information about the current Discord channel",
-  inputSchema: z.object({}),
-  execute: async () => {
+  parameters: z.object({}),
+  handler: async () => {
     const { channel } = getToolContext();
     if (!channel) {
       toolLogger.warn("get_channel_info called without channel context");

@@ -1,16 +1,15 @@
-import { tool } from "../utils/openai-tools";
+import { defineTool } from "@github/copilot-sdk";
 import { z } from "zod";
 import { toolLogger } from "../logger";
 import { getToolContext } from "../utils/types";
 
-export const userInfoTool = tool({
-  name: "get_user_info",
+export const userInfoTool = defineTool("get_user_info", {
   description:
     "Get information about a Discord user by username. The response includes Discord timestamp embeds (like <t:123456789:F>) for dates - use these EXACTLY as-is in your response so Discord renders them as interactive timestamps users can hover over.",
-  inputSchema: z.object({
+  parameters: z.object({
     username: z.string().describe("Username to look up"),
   }),
-  execute: async ({ username }) => {
+  handler: async ({ username }) => {
     const { guild } = getToolContext();
     if (!guild) {
       toolLogger.warn("get_user_info called without guild context");
