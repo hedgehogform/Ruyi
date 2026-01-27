@@ -43,7 +43,6 @@ async function summarizeContent(content: string, url: string): Promise<string> {
         content:
           "You are a content summarizer. Extract and summarize the key information from the provided web page content. Be comprehensive but concise. Preserve important facts, data, quotes, and details. Output only the summary, no preamble.",
       },
-      excludedTools: ["*"],
       streaming: false,
       infiniteSessions: { enabled: false },
     });
@@ -464,7 +463,20 @@ export const fetchTool = defineTool("fetch", {
 - "videos": When user asks for videos, tutorials, clips, trailers, YouTube content
 - "news": When user asks about current events, recent news, breaking stories, headlines
 
-For image requests, always use type="images" and include the thumbnail URLs in your response so Discord can embed them. All image URLs returned have been validated and are working.`,
+FETCHING FULL ARTICLES:
+When a user asks to "explain", "tell me more", "what does it say", or wants details about a specific article you already found, use the "urls" parameter to fetch the full article content. Do NOT just repeat the search snippet—actually fetch the URL to get the real article text. The fetched content will be summarized automatically if long.
+
+RESPONSE FORMATTING:
+- DO NOT just post links. Actually explain and discuss the content you found.
+- Lead with the key information, facts, or answer to the user's question FIRST.
+- For news: Summarize what happened, who's involved, why it matters, then cite sources with links.
+- For web searches: Answer the question using the information found, with inline citations.
+- Format: Write 2-4 sentences of actual explanation, THEN add source links at the end or inline.
+- Example: "The US raised tariffs on South Korean imports to 25% after accusing Seoul of not meeting trade deal commitments. This affects automotive and electronics industries significantly. ([BBC](url), 3h ago)"
+- For images: Include thumbnail URLs so Discord embeds them.
+- Keep it compact—no excessive spacing between items.
+
+CRITICAL: Use EXACT data from results. Never fabricate or guess times, sources, or details. The "age" field contains the real publication time (e.g. "17 hours ago") - use it exactly as provided.`,
   parameters: z.object({
     query: z
       .string()

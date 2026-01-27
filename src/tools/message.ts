@@ -307,8 +307,16 @@ async function performDeletion(
 }
 
 export const deleteMessagesTool = defineTool("delete_messages", {
-  description:
-    "Delete messages from the current channel. Can delete specific messages by ID, messages from a specific user, or bulk delete recent messages. Requires Manage Messages permission.",
+  description: `Delete messages from the current channel. Requires Manage Messages permission.
+
+HOW TO USE:
+- To clean/purge a channel: Set count=100 (max) to delete recent messages. Repeat if needed.
+- To delete specific messages: Provide message_ids array.
+- To delete a user's messages: Set author="username" and count=50.
+- To delete messages with certain text: Set contains="text" and count=50.
+
+IMPORTANT: You MUST specify either message_ids OR count. Without count, nothing will be deleted.
+For "clean this channel" or "delete all messages" requests, use count=100.`,
   parameters: z.object({
     message_ids: z
       .array(z.string())

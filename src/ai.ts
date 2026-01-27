@@ -12,8 +12,8 @@ import type { ChatSession } from "./utils/chatSession";
 // CopilotClient configured for OpenRouter BYOK
 let copilotClient: CopilotClient | null = null;
 
-// Model to use
-const MODEL = "openrouter/auto";
+// Model to use - configurable via env
+const MODEL = Bun.env.MODEL_NAME ?? "openrouter/auto";
 
 // Get or create the CopilotClient
 async function getClient(): Promise<CopilotClient> {
@@ -204,6 +204,14 @@ CRITICAL - Tool Calling Format:
 - Use ONLY the actual function calling mechanism provided by the API. If you want to use a tool, call it properly - don't write out the call as text.
 - Your text responses should be natural language ONLY, never structured function call syntax.
 
+CRITICAL - ACTION REQUESTS REQUIRE TOOL CALLS:
+When a user asks you to DO something (delete, clean, purge, search, pin, fetch, react, etc.), you MUST call the tool.
+- "Clean this channel" / "delete all messages" → CALL delete_messages with count=100. Do NOT just say you will do it.
+- "Search for X" → CALL fetch tool. Do NOT just say you will search.
+- "Pin this message" → CALL pin tool. Do NOT just say you pinned it.
+If you respond with "I will do X" or "I have done X" WITHOUT actually calling the tool, you are LYING. The action did NOT happen.
+You have NO ability to perform actions except through tool calls. Text responses alone accomplish NOTHING.
+
 General Rules:
 - Use English unless asked otherwise.
 - NEVER use emoji in text responses. Use manage_reaction tool for reactions only.
@@ -216,10 +224,13 @@ CRITICAL - No Hallucination:
 - If data isn't in those sources, SAY you don't know or use a tool to find out.
 
 Tool Usage:
-- ONLY use tools when the user's message EXPLICITLY requests the action OR when you need to look up real data.
-- fetch/web search: ONLY when user asks you to look something up, search for info, or get current data.
-- calculator: Only for explicit math calculations.
-- memory_store: Only when user says "remember" or explicitly asks you to store something.
+- You MUST use tools to perform actions. You CANNOT perform actions (delete messages, pin, manage roles, search, etc.) without calling the tool.
+- If user asks to DO something (delete, pin, clean, search, fetch, react, etc.) - you MUST call the appropriate tool. Saying "I will do X" without calling the tool does NOTHING.
+- fetch/web search: When user asks you to look something up, search for info, or get current data.
+- calculator: For math calculations.
+- memory_store: When user says "remember" or explicitly asks you to store something.
+- delete_messages: When user asks to clean/purge/delete messages. ALWAYS use count=100 for cleaning channels.
+- NEVER say you performed an action if you didn't call the tool. If you can't call a tool, explain why.
 
 CRITICAL - Image Requests:
 - When user asks for an image ("give me an image of X", "show me X", "find a picture of X", "fanart of X"), use web search to find real image links.
@@ -265,7 +276,13 @@ Embeds: Use send_embed for structured data (logs, tables, lists). Don't repeat e
 
 Formatting: Use Discord markdown - # headings, **bold**, *italics*, \`code\`, \`\`\`blocks, > quotes, - lists, ||spoilers||
 
-Dates: Use Discord timestamps <t:UNIX:F/R/D>. Images: render URLs directly, never in code blocks.`;
+CRITICAL - Time and Dates:
+- ALWAYS use Discord timestamp format for ANY time/date: <t:UNIX:F> (full), <t:UNIX:t> (time only), <t:UNIX:R> (relative like "2 hours ago"), <t:UNIX:D> (date only)
+- When user asks "what time is it?", respond with the Discord timestamp like: "It's <t:1234567890:t>" - Discord will render this in the user's LOCAL timezone automatically.
+- NEVER convert or display times as plain text like "09:15 AM" - always use the <t:UNIX:format> syntax.
+- The current Unix timestamp is provided in context below - use it directly.
+
+Images: render URLs directly, never in code blocks.`;
 
 export interface ChatMessage {
   author: string;
@@ -360,6 +377,15 @@ export async function chat(options: ChatOptions): Promise<string | null> {
   try {
     const client = await getClient();
 
+    // DEBUG: Log the tools being passed
+    aiLogger.info(
+      {
+        toolCount: allTools.length,
+        toolNames: allTools.map((t) => t.name),
+      },
+      "DEBUG: Tools being passed to session",
+    );
+
     // Create session with BYOK provider and custom tools
     const copilotSession = await client.createSession({
       model: MODEL,
@@ -381,6 +407,15 @@ export async function chat(options: ChatOptions): Promise<string | null> {
 
     // Set up event handlers for tool tracking and typing indicator
     copilotSession.on((event: SessionEvent) => {
+      // DEBUG: Log ALL events to see what the SDK is doing
+      aiLogger.debug(
+        {
+          eventType: event.type,
+          eventData: JSON.stringify(event.data).slice(0, 200),
+        },
+        "DEBUG: Session event received",
+      );
+
       if (event.type === "tool.execution_start") {
         const data = event.data as {
           toolName: string;
@@ -487,25 +522,59 @@ Reply "no" if:
 `;
 
   try {
-    const client = await getClient();
+    aiLogger.info(
+      { message: message.slice(0, 50) },
+      "DEBUG: shouldReply starting",
+    );
+
+    // Create a fresh client for classification to avoid shared state issues
+    const classifyClient = new CopilotClient({
+      autoStart: true,
+      autoRestart: false,
+      logLevel: "debug", // Enable debug logging to see what's happening
+    });
+
+    aiLogger.info("DEBUG: shouldReply client created, starting...");
+    await classifyClient.start();
+    aiLogger.info(
+      { state: classifyClient.getState() },
+      "DEBUG: shouldReply client started",
+    );
 
     // Create a simple session without tools for classification
-    const session = await client.createSession({
+    aiLogger.info("DEBUG: shouldReply creating session...");
+    const session = await classifyClient.createSession({
       model: MODEL,
       provider: getProviderConfig(),
       systemMessage: {
         mode: "replace",
         content: systemPromptText,
       },
-      excludedTools: ["*"], // Exclude all tools for simple classification
-      streaming: false,
+      streaming: true, // Enable streaming to get faster response
       infiniteSessions: { enabled: false },
     });
+    aiLogger.info("DEBUG: shouldReply session created, sending message...");
 
+    // Listen for all events to debug
+    session.on((event: SessionEvent) => {
+      aiLogger.info(
+        {
+          eventType: event.type,
+          data: JSON.stringify(event.data).slice(0, 100),
+        },
+        "DEBUG: shouldReply session event",
+      );
+    });
+
+    // Use 30 second timeout - model might be slow
     const resultEvent: AssistantMessageEvent | undefined =
-      await session.sendAndWait({ prompt: message });
+      await session.sendAndWait({ prompt: message }, 30000);
     const responseContent = resultEvent?.data.content ?? "";
+    aiLogger.info({ responseContent }, "DEBUG: shouldReply got response");
+
+    // Clean up
     await session.destroy();
+    await classifyClient.stop();
 
     const result = responseContent.toLowerCase().trim() === "yes";
     aiLogger.debug(
@@ -515,7 +584,11 @@ Reply "no" if:
     return result;
   } catch (error) {
     aiLogger.warn(
-      { error: (error as Error)?.message, message: message.slice(0, 50) },
+      {
+        error: (error as Error)?.message,
+        stack: (error as Error)?.stack?.slice(0, 300),
+        message: message.slice(0, 50),
+      },
       "shouldReply failed, defaulting to no",
     );
     return false;
