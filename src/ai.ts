@@ -328,9 +328,9 @@ async function buildSystemMessage(
   const contextSection = [
     `<context>`,
     `Current user: ${username}`,
+    `CURRENT TIME: Unix ${currentTime} — Use <t:${currentTime}:t> for time, <t:${currentTime}:F> for full datetime, <t:${currentTime}:R> for relative`,
     historyContext ? `${historyContext}` : null,
     memoryContext ? `${memoryContext}` : null,
-    `Current Unix timestamp: ${currentTime} (use Discord format <t:${currentTime}:F> for full date/time or <t:${currentTime}:t> for just time)`,
     `</context>`,
   ]
     .filter(Boolean)
