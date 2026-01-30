@@ -1,6 +1,8 @@
 import type { SessionEvent } from "@github/copilot-sdk";
+import type { GuildTextBasedChannel } from "discord.js";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
+import { getMcpServerForTool } from "../mcp";
 import type { ChatSession } from "../utils/chatSession";
 import { systemPrompt } from "./prompt";
 import { getOrCreateSession, invalidateSession } from "./session";
@@ -9,11 +11,14 @@ import {
   buildDynamicContext,
   type ChatMessage,
 } from "./context";
+import { setPermissionContext, clearPermissionContext } from "./permissions";
 
 export interface ChatOptions {
   userMessage: string;
   username: string;
   channelId: string;
+  channel: GuildTextBasedChannel;
+  userId: string;
   session: ChatSession;
   chatHistory?: ChatMessage[];
   messageId?: string;
@@ -25,10 +30,15 @@ export async function chat(options: ChatOptions): Promise<string | null> {
     userMessage,
     username,
     channelId,
+    channel,
+    userId,
     session,
     chatHistory = [],
     messageId,
   } = options;
+
+  // Set permission context so the permission handler can prompt the user
+  setPermissionContext(channelId, { channel, userId });
 
   // Build dynamic context to prepend to the user message
   // This includes current user, time, memories, and conversation history
@@ -117,9 +127,16 @@ export async function chat(options: ChatOptions): Promise<string | null> {
 
         // Determine if this is a local tool or MCP tool
         const isLocalTool = registeredToolNames.has(data.toolName);
-        const displayName = isLocalTool
-          ? data.toolName
-          : `🔗 MCP: ${data.toolName}`;
+        const mcpServer = getMcpServerForTool(data.toolName);
+
+        let displayName: string;
+        if (isLocalTool) {
+          displayName = data.toolName;
+        } else if (mcpServer) {
+          displayName = `${mcpServer}:${data.toolName}`;
+        } else {
+          displayName = `mcp:${data.toolName}`;
+        }
 
         toolCallMap.set(data.toolCallId, displayName);
         aiLogger.info(
@@ -173,6 +190,10 @@ export async function chat(options: ChatOptions): Promise<string | null> {
     // Session will be cleaned up on shutdown or if it becomes invalid
 
     if (!finalContent) aiLogger.warn("Chat request returned empty response");
+
+    // Clear permission context after chat completes
+    clearPermissionContext(channelId);
+
     return finalContent;
   } catch (error) {
     const err = error as Error;
@@ -183,6 +204,9 @@ export async function chat(options: ChatOptions): Promise<string | null> {
 
     // If the session errored, invalidate it so a fresh one is created next time
     await invalidateSession(channelId);
+
+    // Clear permission context on error too
+    clearPermissionContext(channelId);
 
     session.onComplete();
     return null;

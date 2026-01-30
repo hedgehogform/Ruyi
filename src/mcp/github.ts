@@ -1,15 +1,7 @@
-import { aiLogger } from "../logger";
-
-// MCP server configuration type (matches SDK expectations)
-export interface MCPHttpServerConfig {
-  type: "http";
-  url: string;
-  headers?: Record<string, string>;
-  tools: string[]; // Required by SDK
-}
+import { MCPServer } from "./base";
 
 /**
- * Get GitHub MCP server configuration.
+ * GitHub MCP server configuration.
  * Requires GITHUB_TOKEN environment variable to be set.
  *
  * Token scopes needed:
@@ -20,20 +12,19 @@ export interface MCPHttpServerConfig {
  * - project: Project boards
  * - security_events: Code scanning, Dependabot, secret scanning
  */
-export function getGitHubMCPConfig(): MCPHttpServerConfig | undefined {
-  const githubToken = Bun.env.GITHUB_TOKEN;
+export class GitHubMCPServer extends MCPServer {
+  readonly name = "github";
+  readonly toolPrefix = "github_";
+  protected readonly url = "https://api.githubcopilot.com/mcp/";
 
-  if (!githubToken) {
-    aiLogger.debug("GITHUB_TOKEN not set, GitHub MCP server disabled");
-    return undefined;
+  isEnabled(): boolean {
+    return !!Bun.env.GITHUB_TOKEN;
   }
 
-  return {
-    type: "http" as const,
-    url: "https://api.githubcopilot.com/mcp/",
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-    },
-    tools: ["*"], // Enable all GitHub tools
-  };
+  protected getHeaders(): Record<string, string> | undefined {
+    const token = Bun.env.GITHUB_TOKEN;
+    return token ? { Authorization: `Bearer ${token}` } : undefined;
+  }
 }
+
+export const githubMCP = new GitHubMCPServer();

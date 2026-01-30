@@ -24,6 +24,13 @@ export { chat, type ChatOptions } from "./chat";
 // Classifier
 export { shouldReply } from "./classifier";
 
+// Permissions (for Discord button-based approval of shell/write/etc)
+export {
+  setPermissionContext,
+  clearPermissionContext,
+  type PermissionContext,
+} from "./permissions";
+
 // System prompt (for reference/testing)
 export { systemPrompt } from "./prompt";
 

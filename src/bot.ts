@@ -6,12 +6,19 @@ import {
   REST,
   Routes,
   type Message,
+  type GuildTextBasedChannel,
 } from "discord.js";
 import { chat, shouldReply, rememberMessage } from "./ai";
 import { setToolContext } from "./tools";
 import { botLogger } from "./logger";
 import { handleCommands } from "./commands";
-import { slashCommands, handleSlashCommand } from "./slashCommands";
+import {
+  slashCommands,
+  handleSlashCommand,
+  handleSmitherySelect,
+  handleSmitheryCodeButton,
+  handleSmitheryModal,
+} from "./slashCommands";
 import { ChatSession } from "./utils/chatSession";
 import {
   fetchReplyChain,
@@ -157,11 +164,17 @@ async function handleAIChat(message: Message): Promise<void> {
 
   await session.sendStatusEmbed(message);
 
+  // Cast channel - permission prompts work best in guild channels
+  // DMs will still work but permissions may auto-deny if context is missing
+  const guildChannel = message.channel as GuildTextBasedChannel;
+
   try {
     const reply = await chat({
       userMessage: content,
       username,
       channelId: message.channel.id,
+      channel: guildChannel,
+      userId: message.author.id,
       session,
       chatHistory: combinedHistory,
       messageId: message.id,
@@ -233,8 +246,21 @@ export function registerEvents() {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-    await handleSlashCommand(interaction);
+    if (interaction.isChatInputCommand()) {
+      await handleSlashCommand(interaction);
+    } else if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === "smithery_select_server") {
+        await handleSmitherySelect(interaction);
+      }
+    } else if (interaction.isButton()) {
+      if (interaction.customId === "smithery_enter_code") {
+        await handleSmitheryCodeButton(interaction);
+      }
+    } else if (interaction.isModalSubmit()) {
+      if (interaction.customId === "smithery_code_modal") {
+        await handleSmitheryModal(interaction);
+      }
+    }
   });
 
   client.on(Events.MessageCreate, async (message) => {

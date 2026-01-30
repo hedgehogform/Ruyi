@@ -12,7 +12,6 @@ export { pinTool } from "./pin";
 export { searchMessagesTool, deleteMessagesTool } from "./message";
 export { embedTool } from "./embed";
 export { generateImageTool } from "./image";
-export { fetchTool } from "./web";
 export {
   memoryStoreTool,
   memoryRecallTool,
@@ -33,7 +32,6 @@ import { pinTool } from "./pin";
 import { searchMessagesTool, deleteMessagesTool } from "./message";
 import { embedTool } from "./embed";
 import { generateImageTool } from "./image";
-import { fetchTool } from "./web";
 import {
   memoryStoreTool,
   memoryRecallTool,
@@ -56,7 +54,6 @@ export const allTools = [
   deleteMessagesTool,
   embedTool,
   generateImageTool,
-  fetchTool,
   memoryStoreTool,
   memoryRecallTool,
   searchMemoryTool,

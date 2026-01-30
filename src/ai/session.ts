@@ -2,8 +2,9 @@ import type { CopilotSession as SDKSession } from "@github/copilot-sdk";
 import { allTools } from "../tools";
 import { aiLogger } from "../logger";
 import { CopilotSession as CopilotSessionModel } from "../db/models";
-import { getMcpServersConfig } from "../mcp";
+import { getMcpTools } from "../mcp/client";
 import { getClient, getProviderConfig, MODEL } from "./client";
+import { createPermissionHandler } from "./permissions";
 
 // In-memory cache of active SDK sessions by channel ID
 const activeSessions = new Map<string, SDKSession>();
@@ -19,6 +20,10 @@ export async function loadPersistedSessions(): Promise<void> {
       isActive: true,
     });
 
+    // Get all tools including MCP tools
+    const mcpTools = getMcpTools();
+    const allAvailableTools = [...allTools, ...mcpTools];
+
     aiLogger.info(
       { count: persistedSessions.length },
       "Loading persisted sessions",
@@ -26,9 +31,9 @@ export async function loadPersistedSessions(): Promise<void> {
 
     for (const persisted of persistedSessions) {
       try {
-        // Try to resume the session - ResumeSessionConfig only takes tools, not model/provider
+        // Try to resume the session
         const session = await client.resumeSession(persisted.sessionId, {
-          tools: [...allTools],
+          tools: [...allAvailableTools],
         });
 
         activeSessions.set(persisted.channelId, session);
@@ -92,9 +97,13 @@ export async function getOrCreateSession(
 
   if (persistedSession) {
     try {
-      // Try to resume the session - ResumeSessionConfig only takes tools, not model/provider
+      // Get all tools including MCP tools
+      const mcpTools = getMcpTools();
+      const allAvailableTools = [...allTools, ...mcpTools];
+
+      // Try to resume the session
       const session = await client.resumeSession(persistedSession.sessionId, {
-        tools: [...allTools],
+        tools: [...allAvailableTools],
       });
 
       activeSessions.set(channelId, session);
@@ -124,33 +133,36 @@ export async function getOrCreateSession(
   // Create a new session with a channel-based session ID
   const sessionId = `ruyi-${channelId}-${Date.now()}`;
 
-  // Get MCP servers config (GitHub MCP if token is set)
-  const mcpServers = getMcpServersConfig();
+  // Get all tools including MCP tools (wrapped via client.ts)
+  const mcpTools = getMcpTools();
+  const allAvailableTools = [...allTools, ...mcpTools];
 
-  console.log(
-    "DEBUG: Creating session with MCP config:",
-    mcpServers ? JSON.stringify(mcpServers, null, 2) : "none",
-  );
+  // Create permission handler for Discord button-based approval
+  const permissionHandler = createPermissionHandler(channelId);
 
   const session = await client.createSession({
     sessionId,
     model: MODEL,
     provider: getProviderConfig(),
-    tools: [...allTools],
+    tools: [...allAvailableTools],
     systemMessage: {
       mode: "replace",
       content: systemMessage,
     },
     streaming: false,
-    infiniteSessions: { enabled: true }, // Enable infinite sessions for persistence
-    ...(mcpServers && { mcpServers }), // Add MCP servers if configured
+    infiniteSessions: { enabled: true },
+    onPermissionRequest: permissionHandler,
   });
 
-  // Log MCP status
-  if (mcpServers) {
+  // Log MCP tools included
+  if (mcpTools.length > 0) {
     aiLogger.info(
-      { channelId, mcpServers: Object.keys(mcpServers) },
-      "Session created with MCP servers",
+      {
+        channelId,
+        mcpToolCount: mcpTools.length,
+        tools: mcpTools.map((t) => t.name),
+      },
+      "Session created with MCP tools",
     );
   }
 
