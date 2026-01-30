@@ -11,7 +11,9 @@ const PROTECTED_PATTERNS = [
 ];
 
 // Find all ranges in the text that should not be split
-function findProtectedRanges(text: string): Array<{ start: number; end: number }> {
+function findProtectedRanges(
+  text: string,
+): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = [];
 
   for (const pattern of PROTECTED_PATTERNS) {
@@ -94,7 +96,11 @@ export function splitMessage(text: string, maxLength = 2000): string[] {
     }
 
     const protectedRanges = findProtectedRanges(remaining);
-    const splitIndex = findSafeSplitPoint(remaining, maxLength, protectedRanges);
+    const splitIndex = findSafeSplitPoint(
+      remaining,
+      maxLength,
+      protectedRanges,
+    );
 
     chunks.push(remaining.slice(0, splitIndex).trimEnd());
     remaining = remaining.slice(splitIndex).trimStart();
@@ -191,7 +197,8 @@ export async function fetchChatHistory(
   const chatHistory: ChatMessage[] = [];
   if (!("messages" in message.channel)) return chatHistory;
 
-  const messages = await message.channel.messages.fetch({ limit: 15 });
+  // Fetch 30 messages to give the model more context for avoiding repetition
+  const messages = await message.channel.messages.fetch({ limit: 30 });
   const sorted = [...messages.values()].reverse();
   for (const msg of sorted) {
     if (msg.id === message.id) continue;
