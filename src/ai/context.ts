@@ -144,13 +144,13 @@ export function buildConversationHistory(chatHistory: ChatMessage[]): string {
   const formatted = recent
     .map((msg) => {
       // Mark bot's own messages clearly so it knows what it already said
-      const prefix = msg.isBot ? "[You]" : msg.author;
+      const prefix = msg.isBot ? "Ruyi" : msg.author;
       // Full content - no truncation
       return `${prefix}: ${msg.content}`;
     })
     .join("\n");
 
-  return `\n\nConversation history (messages marked [You] are YOUR previous responses - DO NOT repeat them):\n${formatted}`;
+  return `\n\nConversation history (your previous messages are labeled "Ruyi" - do not repeat them, and NEVER include "Ruyi:" prefix in your responses):\n${formatted}`;
 }
 
 // Build dynamic context to prepend to user messages (for persistent sessions)
@@ -177,7 +177,7 @@ export async function buildDynamicContext(
     .join("\n");
 
   const instructionsSection = isOngoing
-    ? `\n<instructions>\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly.\nCRITICAL: Review your [You] messages above. You MUST NOT repeat any phrase, question, or sentiment from those messages. If you already asked "what's on your mind" or said "I understand" - use COMPLETELY DIFFERENT words now.\n</instructions>\n`
+    ? `\n<instructions>\nThis is a CONTINUING conversation - do NOT greet the user, just respond directly.\nCRITICAL: Review your previous "Ruyi:" messages above. Do NOT repeat any phrase, question, or sentiment from them. Use COMPLETELY DIFFERENT words.\nREMINDER: Never include any prefix like "Ruyi:", "[Ruyi]:", "[You]:", etc in your response - just speak naturally.\n</instructions>\n`
     : "";
 
   return `${contextLines}${instructionsSection}`;
