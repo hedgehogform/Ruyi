@@ -57,6 +57,8 @@ export class SessionManager {
         try {
           const session = await client.resumeSession(persisted.sessionId, {
             tools: [...allAvailableTools],
+            provider: copilotClientManager.getProviderConfig(),
+            model: copilotClientManager.model,
             onPermissionRequest: permissionManager.createHandler(
               persisted.channelId,
             ),
@@ -129,6 +131,8 @@ export class SessionManager {
             persistedSession.sessionId,
             {
               tools: [...allAvailableTools],
+              provider: copilotClientManager.getProviderConfig(),
+              model: copilotClientManager.model,
               onPermissionRequest: permissionManager.createHandler(channelId),
             },
           );
