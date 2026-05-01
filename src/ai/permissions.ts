@@ -27,6 +27,23 @@ export interface PermissionContext {
   userId: string;
 }
 
+/** Mirrors the internal SDK PermissionRequestUrl shape (not publicly exported). */
+interface UrlPermissionRequest {
+  kind: "url";
+  url: string;
+  intention: string;
+  toolCallId?: string;
+}
+
+/** Mirrors the internal SDK PermissionRequestCustomTool shape (not publicly exported). */
+interface CustomToolPermissionRequest {
+  kind: "custom-tool";
+  toolName: string;
+  toolDescription: string;
+  args?: Record<string, unknown>;
+  toolCallId?: string;
+}
+
 function getPermissionDescription(request: PermissionRequest): string {
   switch (request.kind) {
     case "shell":
@@ -37,10 +54,16 @@ function getPermissionDescription(request: PermissionRequest): string {
       return "Read a file";
     case "mcp":
       return "Use an MCP tool";
-    case "url":
-      return "Access a URL";
-    case "custom-tool":
-      return "Use a custom tool";
+    case "url": {
+      const req = request as UrlPermissionRequest;
+      const suffix = req.intention ? ` (${req.intention})` : "";
+      return "Fetch URL: " + req.url + suffix;
+    }
+    case "custom-tool": {
+      const req = request as CustomToolPermissionRequest;
+      const suffix = req.toolDescription ? `: ${req.toolDescription}` : "";
+      return "Use tool `" + req.toolName + "`" + suffix;
+    }
     case "memory":
       return "Access memory";
     case "hook":
@@ -48,6 +71,13 @@ function getPermissionDescription(request: PermissionRequest): string {
     default:
       return `Permission request: ${request.kind}`;
   }
+}
+
+function getPermissionLabel(request: PermissionRequest): string {
+  if (request.kind === "custom-tool")
+    return (request as CustomToolPermissionRequest).toolName;
+  if (request.kind === "url") return (request as UrlPermissionRequest).url;
+  return request.kind.toUpperCase();
 }
 
 function getPermissionColor(kind: string): number {
@@ -98,7 +128,7 @@ export class PermissionManager {
 
     try {
       const embed = new EmbedBuilder()
-        .setTitle(`🔐 Permission Required: ${request.kind.toUpperCase()}`)
+        .setTitle(`🔐 Permission Required: ${getPermissionLabel(request)}`)
         .setDescription(getPermissionDescription(request))
         .setColor(getPermissionColor(request.kind))
         .setFooter({
@@ -153,8 +183,8 @@ export class PermissionManager {
         const resultEmbed = new EmbedBuilder()
           .setTitle(
             approved
-              ? `✅ Permission Granted: ${request.kind.toUpperCase()}`
-              : `❌ Permission Denied: ${request.kind.toUpperCase()}`,
+              ? `✅ Permission Granted: ${getPermissionLabel(request)}`
+              : `❌ Permission Denied: ${getPermissionLabel(request)}`,
           )
           .setDescription(getPermissionDescription(request))
           .setColor(approved ? 0x00ff00 : 0xff0000)
