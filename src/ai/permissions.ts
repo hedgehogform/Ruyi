@@ -29,34 +29,22 @@ export interface PermissionContext {
 
 function getPermissionDescription(request: PermissionRequest): string {
   switch (request.kind) {
-    case "shell": {
-      const command =
-        (request.command as string) ||
-        (request.shell as string) ||
-        "unknown command";
-      return `Execute shell command:\n\`\`\`\n${command}\n\`\`\``;
-    }
-    case "write": {
-      const path =
-        (request.path as string) || (request.file as string) || "unknown file";
-      return `Write to file: \`${path}\``;
-    }
-    case "read": {
-      const path =
-        (request.path as string) || (request.file as string) || "unknown file";
-      return `Read file: \`${path}\``;
-    }
-    case "mcp": {
-      const tool =
-        (request.tool as string) ||
-        (request.toolName as string) ||
-        "unknown tool";
-      return `Use MCP tool: \`${tool}\``;
-    }
-    case "url": {
-      const url = (request.url as string) || "unknown URL";
-      return `Access URL: \`${url}\``;
-    }
+    case "shell":
+      return "Execute a shell command";
+    case "write":
+      return "Write to a file";
+    case "read":
+      return "Read a file";
+    case "mcp":
+      return "Use an MCP tool";
+    case "url":
+      return "Access a URL";
+    case "custom-tool":
+      return "Use a custom tool";
+    case "memory":
+      return "Access memory";
+    case "hook":
+      return "Run a hook";
     default:
       return `Permission request: ${request.kind}`;
   }
@@ -103,9 +91,7 @@ export class PermissionManager {
         { channelId, kind: request.kind },
         "No permission context found, denying request",
       );
-      return {
-        kind: "denied-no-approval-rule-and-could-not-request-from-user",
-      };
+      return { kind: "user-not-available" };
     }
 
     const { channel, userId } = context;
@@ -185,9 +171,7 @@ export class PermissionManager {
           "User responded to permission request",
         );
 
-        return approved
-          ? { kind: "approved" }
-          : { kind: "denied-interactively-by-user" };
+        return approved ? { kind: "approve-once" } : { kind: "reject" };
       } catch {
         const timeoutRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
@@ -231,9 +215,7 @@ export class PermissionManager {
           "Permission request timed out",
         );
 
-        return {
-          kind: "denied-no-approval-rule-and-could-not-request-from-user",
-        };
+        return { kind: "user-not-available" };
       }
     } catch (error) {
       aiLogger.error(
@@ -245,9 +227,7 @@ export class PermissionManager {
         },
         "Failed to send permission prompt",
       );
-      return {
-        kind: "denied-no-approval-rule-and-could-not-request-from-user",
-      };
+      return { kind: "user-not-available" };
     }
   }
 

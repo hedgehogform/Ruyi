@@ -33,7 +33,9 @@ async function handleSaveMemory(
   const truncatedValue = truncateValue(value);
   const limit = scope === "global" ? 50 : 30;
   const query =
-    scope === "global" ? { scope: "global" } : { scope: "user", username };
+    scope === "global"
+      ? { scope: "global" as const }
+      : { scope: "user" as const, username };
   const count = await Memory.countDocuments(query);
 
   if (count >= limit) {
@@ -76,8 +78,8 @@ async function handlePinMemory(
   }
   const filter =
     scope === "global"
-      ? { key, scope: "global" }
-      : { key, scope: "user", username };
+      ? { key, scope: "global" as const }
+      : { key, scope: "user" as const, username };
   const result = await Memory.updateOne(filter, { $set: { pinned } });
   if (result.matchedCount === 0) {
     return { success: false, message: `No memory found for "${key}"` };
@@ -98,8 +100,8 @@ async function handleGetMemory(
   }
   const query =
     scope === "global"
-      ? { key, scope: "global" }
-      : { key, scope: "user", username };
+      ? { key, scope: "global" as const }
+      : { key, scope: "user" as const, username };
   const item = await Memory.findOne(query);
 
   if (!item) {
@@ -125,8 +127,8 @@ async function handleDeleteMemory(
   }
   const query =
     scope === "global"
-      ? { key, scope: "global" }
-      : { key, scope: "user", username };
+      ? { key, scope: "global" as const }
+      : { key, scope: "user" as const, username };
   const result = await Memory.deleteOne(query);
 
   if (result.deletedCount > 0) {
